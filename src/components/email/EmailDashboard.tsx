@@ -14,9 +14,6 @@ export function EmailDashboard() {
   const [allEmails, setAllEmails] = useState<Email[]>([])
   const [activeTab, setActiveTab] = useState<'inbox' | 'spam-review'>('inbox')
   const [loading, setLoading] = useState(true)
-  const [loadingMore, setLoadingMore] = useState(false)
-  const [hasMore, setHasMore] = useState(false)
-  const [nextSkip, setNextSkip] = useState(0)
   const [usingMock, setUsingMock] = useState(false)
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null)
   const [composeDraft, setComposeDraft] = useState<Partial<EmailDraft> | null>(null)
@@ -36,40 +33,35 @@ export function EmailDashboard() {
 
   const loadEmails = useCallback(async () => {
     setLoading(true)
+    setAllEmails([])
     try {
-      const data = await fetchEmails({ top: 200 })
-      setAllEmails(data.emails)
-      setHasMore(data.hasMore)
-      setNextSkip(data.nextSkip)
+      // Auto-paginate and load everything — no manual "load more" needed
+      let skip = 0
+      let accumulated: Email[] = []
+      let more = true
+
+      while (more) {
+        const data = await fetchEmails({ top: 200, skip })
+        accumulated = [...accumulated, ...data.emails]
+        // Update UI progressively so user sees emails appearing
+        setAllEmails([...accumulated])
+        more = data.hasMore
+        skip = data.nextSkip
+        // Brief pause between pages to avoid throttling
+        if (more) await new Promise(r => setTimeout(r, 300))
+      }
+
       setUsingMock(false)
     } catch (err) {
       console.warn('Email API unavailable, falling back to mock data:', err)
       setAllEmails(mockEmails)
-      setHasMore(false)
       setUsingMock(true)
     } finally {
       setLoading(false)
     }
   }, [])
 
-  const loadMore = useCallback(async () => {
-    if (loadingMore || !hasMore) return
-    setLoadingMore(true)
-    try {
-      const data = await fetchEmails({ top: 200, skip: nextSkip })
-      setAllEmails(prev => {
-        const existingIds = new Set(prev.map(e => e.id))
-        const newEmails = data.emails.filter(e => !existingIds.has(e.id))
-        return [...prev, ...newEmails]
-      })
-      setHasMore(data.hasMore)
-      setNextSkip(data.nextSkip)
-    } catch (err) {
-      console.warn('Load more failed:', err)
-    } finally {
-      setLoadingMore(false)
-    }
-  }, [loadingMore, hasMore, nextSkip])
+
 
   useEffect(() => {
     loadDynamicSafelist().then(() => loadEmails())
@@ -293,16 +285,11 @@ export function EmailDashboard() {
         )}
       </Card>
 
-      {/* Load More */}
-      {hasMore && !loading && (
-        <div className="flex justify-center pt-1">
-          <Button variant="ghost" size="sm" onClick={loadMore} disabled={loadingMore}>
-            {loadingMore ? (
-              <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…</>
-            ) : (
-              `Load more emails (${allEmails.length} loaded so far)`
-            )}
-          </Button>
+      {/* Progressive load indicator */}
+      {loading && allEmails.length > 0 && (
+        <div className="flex items-center justify-center gap-2 py-2 text-slate-500 text-xs">
+          <Loader2 className="w-3 h-3 animate-spin" />
+          Loading more… ({allEmails.length} so far)
         </div>
       )}
 
