@@ -96,6 +96,29 @@ export interface QuickStats {
   activeAgents: number
 }
 
+// ─── Leads ───────────────────────────────────────────────────────────────────
+
+export interface ImeLead {
+  woId: string
+  customerName: string
+  phone: string
+  officePhone: string
+  email: string
+  address: string
+  store: string
+  status: string
+  emailDate: string
+  emailId: string
+  contacted?: boolean
+}
+
+export interface SmartMailBatch {
+  emailId: string
+  subject: string
+  date: string
+  status: 'pdf_ready' | 'processing' | 'done' | 'error'
+}
+
 // ─── API Hook Types (for future CRM integration) ─────────────────────────────
 
 export interface CRMContact {

@@ -6,6 +6,7 @@ import { EmailDashboard } from '@/components/email/EmailDashboard'
 import { AgentStatusPanel } from '@/components/agents/AgentStatusPanel'
 import { MarketingHub } from '@/components/marketing/MarketingHub'
 import { ResearchFeed } from '@/components/research/ResearchFeed'
+import { LeadsPanel } from '@/components/leads/LeadsPanel'
 import { mockQuickStats } from '@/data/mock'
 
 export default function App() {
@@ -22,6 +23,7 @@ export default function App() {
               <Route path="/agents" element={<AgentStatusPanel />} />
               <Route path="/marketing" element={<MarketingHub />} />
               <Route path="/research" element={<ResearchFeed />} />
+              <Route path="/leads" element={<LeadsPanel />} />
             </Routes>
           </main>
         </div>

@@ -15,3 +15,7 @@ services:
         sync: false
       - key: MAILBOX_EMAIL
         sync: false
+      - key: IME_USERNAME
+        sync: false
+      - key: IME_PASSWORD
+        sync: false
