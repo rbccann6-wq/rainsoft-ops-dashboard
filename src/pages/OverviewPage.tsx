@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { Mail, Bot, Megaphone, FlaskConical, AlertTriangle, ArrowRight } from 'lucide-react'
 import { mockEmails, mockAgents, mockSocialPosts, mockGoogleAdsSpend, mockResearchTasks } from '@/data/mock'
@@ -5,9 +6,19 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import { ProgressBar } from '@/components/ui/ProgressBar'
 import { cn } from '@/lib/utils'
+import type { Email } from '@/types'
+import { fetchEmails } from '@/lib/emailApi'
 
 export function OverviewPage() {
-  const unread = mockEmails.filter((e) => !e.isRead)
+  const [emails, setEmails] = useState<Email[]>(mockEmails)
+
+  useEffect(() => {
+    fetchEmails()
+      .then(setEmails)
+      .catch(() => setEmails(mockEmails))
+  }, [])
+
+  const unread = emails.filter((e) => !e.isRead)
   const pendingPosts = mockSocialPosts.filter((p) => p.status === 'draft' || p.status === 'scheduled')
   const ads = mockGoogleAdsSpend
   const adsPercent = (ads.monthlySpend / ads.monthlyBudget) * 100
