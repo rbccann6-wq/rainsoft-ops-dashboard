@@ -2,8 +2,16 @@ import type { Email } from '@/types'
 
 const BASE = '/api'
 
-export async function fetchEmails(): Promise<Email[]> {
-  const resp = await fetch(`${BASE}/emails`)
+export async function fetchEmails(opts?: {
+  top?: number
+  skip?: number
+  unreadOnly?: boolean
+}): Promise<{ emails: Email[]; nextSkip: number; hasMore: boolean }> {
+  const params = new URLSearchParams()
+  if (opts?.top) params.set('top', String(opts.top))
+  if (opts?.skip) params.set('skip', String(opts.skip))
+  if (opts?.unreadOnly) params.set('unreadOnly', 'true')
+  const resp = await fetch(`${BASE}/emails?${params}`)
   if (!resp.ok) throw new Error(`Failed to fetch emails: ${resp.status}`)
   return resp.json()
 }

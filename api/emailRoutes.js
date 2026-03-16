@@ -103,19 +103,31 @@ function mapMessage(msg, includeFullBody = false) {
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
-// GET /api/emails — top 20 unread emails
+// GET /api/emails — all inbox emails, paginated
+// Query params: ?top=200&skip=0&unreadOnly=false
 router.get('/emails', async (req, res) => {
   try {
     const token = await getAccessToken()
     const mailbox = MAILBOX()
-    const qs = new URLSearchParams({
-      $filter: 'isRead eq false',
-      $top: '20',
+    const top = Math.min(parseInt(req.query.top) || 200, 500)
+    const skip = parseInt(req.query.skip) || 0
+    const unreadOnly = req.query.unreadOnly === 'true'
+
+    const params = {
+      $top: String(top),
+      $skip: String(skip),
       $select: 'id,subject,from,receivedDateTime,bodyPreview,isRead,hasAttachments,conversationId',
       $orderby: 'receivedDateTime desc',
-    })
+    }
+    if (unreadOnly) params['$filter'] = 'isRead eq false'
+
+    const qs = new URLSearchParams(params)
     const data = await graphRequest('GET', `/users/${mailbox}/messages?${qs}`, token)
-    res.json((data.value || []).map((m) => mapMessage(m)))
+    res.json({
+      emails: (data.value || []).map((m) => mapMessage(m)),
+      nextSkip: skip + top,
+      hasMore: (data.value || []).length === top,
+    })
   } catch (err) {
     console.error('GET /api/emails:', err.message)
     res.status(500).json({ error: err.message })

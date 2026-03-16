@@ -14,6 +14,9 @@ export function EmailDashboard() {
   const [allEmails, setAllEmails] = useState<Email[]>([])
   const [activeTab, setActiveTab] = useState<'inbox' | 'spam-review'>('inbox')
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
+  const [nextSkip, setNextSkip] = useState(0)
   const [usingMock, setUsingMock] = useState(false)
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null)
   const [composeDraft, setComposeDraft] = useState<Partial<EmailDraft> | null>(null)
@@ -21,13 +24,11 @@ export function EmailDashboard() {
   const [showDrafts, setShowDrafts] = useState(false)
   const [savingDraft, setSavingDraft] = useState(false)
   const [sendingId, setSendingId] = useState<string | null>(null)
-  // IDs manually moved back to inbox from spam review
   const [restoredIds, setRestoredIds] = useState<Set<string>>(new Set())
 
   const { inbox: inboxEmails, spamReview: spamEmails } = classifyAll(
     allEmails.filter(e => !restoredIds.has(e.id))
   )
-  // Restored emails always go to inbox view
   const restoredEmails = allEmails.filter(e => restoredIds.has(e.id))
   const emails = activeTab === 'inbox'
     ? [...inboxEmails, ...restoredEmails]
@@ -36,17 +37,39 @@ export function EmailDashboard() {
   const loadEmails = useCallback(async () => {
     setLoading(true)
     try {
-      const data = await fetchEmails()
-      setAllEmails(data)
+      const data = await fetchEmails({ top: 200 })
+      setAllEmails(data.emails)
+      setHasMore(data.hasMore)
+      setNextSkip(data.nextSkip)
       setUsingMock(false)
     } catch (err) {
       console.warn('Email API unavailable, falling back to mock data:', err)
       setAllEmails(mockEmails)
+      setHasMore(false)
       setUsingMock(true)
     } finally {
       setLoading(false)
     }
   }, [])
+
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !hasMore) return
+    setLoadingMore(true)
+    try {
+      const data = await fetchEmails({ top: 200, skip: nextSkip })
+      setAllEmails(prev => {
+        const existingIds = new Set(prev.map(e => e.id))
+        const newEmails = data.emails.filter(e => !existingIds.has(e.id))
+        return [...prev, ...newEmails]
+      })
+      setHasMore(data.hasMore)
+      setNextSkip(data.nextSkip)
+    } catch (err) {
+      console.warn('Load more failed:', err)
+    } finally {
+      setLoadingMore(false)
+    }
+  }, [loadingMore, hasMore, nextSkip])
 
   useEffect(() => {
     loadEmails()
@@ -258,6 +281,19 @@ export function EmailDashboard() {
           </div>
         )}
       </Card>
+
+      {/* Load More */}
+      {hasMore && !loading && (
+        <div className="flex justify-center pt-1">
+          <Button variant="ghost" size="sm" onClick={loadMore} disabled={loadingMore}>
+            {loadingMore ? (
+              <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…</>
+            ) : (
+              `Load more emails (${allEmails.length} loaded so far)`
+            )}
+          </Button>
+        </div>
+      )}
 
       {/* Email Detail Modal */}
       <Modal

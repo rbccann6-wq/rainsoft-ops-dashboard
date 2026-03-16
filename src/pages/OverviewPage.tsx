@@ -13,8 +13,8 @@ export function OverviewPage() {
   const [emails, setEmails] = useState<Email[]>(mockEmails)
 
   useEffect(() => {
-    fetchEmails()
-      .then(setEmails)
+    fetchEmails({ top: 50 })
+      .then(data => setEmails(data.emails))
       .catch(() => setEmails(mockEmails))
   }, [])
 
