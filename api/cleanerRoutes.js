@@ -93,20 +93,33 @@ function isSafe(senderEmail) {
   return SAFE_DOMAINS.has(domain)
 }
 
-// ─── GET /api/cleaner/senders — scan all emails, group by sender ──────────────
-// This paginates through ALL inbox mail server-side and returns sender groups.
+// ─── Background scan state (in-memory, survives the request lifecycle) ────────
 
-router.get('/cleaner/senders', async (req, res) => {
+let scanState = {
+  status: 'idle', // idle | running | done | error
+  startedAt: null,
+  finishedAt: null,
+  pagesScanned: 0,
+  totalScanned: 0,
+  senders: [],
+  error: null,
+}
+
+async function runFullScan() {
+  if (scanState.status === 'running') return // already running
+
+  scanState = { status: 'running', startedAt: new Date().toISOString(), finishedAt: null, pagesScanned: 0, totalScanned: 0, senders: [], error: null }
+
   try {
     const token = await withRetry(getToken, 'token')
     const mailbox = process.env.MAILBOX_EMAIL
-    const senderMap = {} // email -> { name, email, domain, count, safe, ids[], sample[] }
+    const senderMap = {}
 
     let url = `https://graph.microsoft.com/v1.0/users/${mailbox}/messages?` +
-      `$top=1000&$select=id,from,subject,receivedDateTime,isRead&$orderby=receivedDateTime desc`
+      `$top=999&$select=id,from,subject,receivedDateTime&$orderby=receivedDateTime desc`
 
     let pageCount = 0
-    const MAX_PAGES = 100 // max 100k emails
+    const MAX_PAGES = 200
 
     while (url && pageCount < MAX_PAGES) {
       const data = await withRetry(async () => {
@@ -121,44 +134,56 @@ router.get('/cleaner/senders', async (req, res) => {
         const domain = getDomain(addr)
 
         if (!senderMap[addr]) {
-          senderMap[addr] = {
-            name,
-            email: addr,
-            domain,
-            count: 0,
-            safe: isSafe(addr),
-            ids: [],
-            samples: [],
-          }
+          senderMap[addr] = { name, email: addr, domain, count: 0, safe: isSafe(addr), samples: [] }
         }
         senderMap[addr].count++
-        // Keep up to 50 IDs for bulk delete (we'll fetch more on demand)
-        if (senderMap[addr].ids.length < 500) senderMap[addr].ids.push(msg.id)
         if (senderMap[addr].samples.length < 3) {
-          senderMap[addr].samples.push({
-            subject: msg.subject,
-            date: msg.receivedDateTime,
-          })
+          senderMap[addr].samples.push({ subject: msg.subject, date: msg.receivedDateTime })
         }
       }
 
+      scanState.pagesScanned = ++pageCount
+      scanState.totalScanned = Object.values(senderMap).reduce((s, x) => s + x.count, 0)
+      // Update senders progressively so poll endpoint shows progress
+      scanState.senders = Object.values(senderMap).sort((a, b) => b.count - a.count)
+
       url = data['@odata.nextLink'] ?? null
-      pageCount++
+      // Small pause to avoid throttling
+      if (url) await new Promise(r => setTimeout(r, 200))
     }
 
-    // Sort by count desc
-    const senders = Object.values(senderMap).sort((a, b) => b.count - a.count)
-
-    res.json({
-      senders,
-      totalScanned: senders.reduce((s, x) => s + x.count, 0),
-      totalSenders: senders.length,
-      pagesScanned: pageCount,
-    })
+    scanState.status = 'done'
+    scanState.finishedAt = new Date().toISOString()
   } catch (err) {
-    console.error('GET /api/cleaner/senders:', err.message)
-    res.status(500).json({ error: err.message })
+    scanState.status = 'error'
+    scanState.error = err.message
+    console.error('Background scan failed:', err.message)
   }
+}
+
+// ─── POST /api/cleaner/scan/start — kick off background scan ─────────────────
+
+router.post('/cleaner/scan/start', (req, res) => {
+  if (scanState.status !== 'running') {
+    runFullScan() // fire and forget — runs in background
+  }
+  res.json({ started: true, status: scanState.status })
+})
+
+// ─── GET /api/cleaner/scan/status — poll progress ────────────────────────────
+
+router.get('/cleaner/scan/status', (req, res) => {
+  res.json({
+    status: scanState.status,
+    pagesScanned: scanState.pagesScanned,
+    totalScanned: scanState.totalScanned,
+    totalSenders: scanState.senders.length,
+    startedAt: scanState.startedAt,
+    finishedAt: scanState.finishedAt,
+    error: scanState.error,
+    // Only return full senders list when done to keep response small during scan
+    senders: scanState.status === 'done' ? scanState.senders : [],
+  })
 })
 
 // ─── POST /api/cleaner/delete-sender — delete all emails from a sender ────────
