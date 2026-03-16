@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
 import { cn } from '@/lib/utils'
 import { fetchEmails, createDraftReply, sendReply } from '@/lib/emailApi'
-import { classifyAll } from '@/lib/spamClassifier'
+import { classifyAll, loadDynamicSafelist } from '@/lib/spamClassifier'
 
 export function EmailDashboard() {
   const [allEmails, setAllEmails] = useState<Email[]>([])
@@ -72,7 +72,7 @@ export function EmailDashboard() {
   }, [loadingMore, hasMore, nextSkip])
 
   useEffect(() => {
-    loadEmails()
+    loadDynamicSafelist().then(() => loadEmails())
   }, [loadEmails])
 
   const unreadCount = inboxEmails.filter((e) => !e.isRead).length
@@ -84,8 +84,19 @@ export function EmailDashboard() {
     setSelectedEmail({ ...email, isRead: true })
   }
 
-  function restoreToInbox(email: Email) {
+  async function restoreToInbox(email: Email) {
+    // Optimistically move in UI
     setRestoredIds(prev => new Set([...prev, email.id]))
+    // Persist to safelist + M365 override so it never gets flagged again
+    try {
+      await fetch('/api/safelist/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ senderEmail: email.senderEmail, messageId: email.id }),
+      })
+      // Reload dynamic safelist so classifier is updated immediately
+      await loadDynamicSafelist()
+    } catch { /* best effort — UI already updated */ }
   }
 
   function openCompose(email?: Email) {

@@ -1,5 +1,20 @@
 import type { Email } from '@/types'
 
+// ─── Dynamic safelist (loaded from server) ───────────────────────────────────
+let dynamicSafeEmails: Set<string> = new Set()
+let dynamicSafeDomains: Set<string> = new Set()
+
+export async function loadDynamicSafelist() {
+  try {
+    const resp = await fetch('/api/safelist')
+    if (resp.ok) {
+      const data = await resp.json()
+      dynamicSafeEmails = new Set((data.emails ?? []).map((e: string) => e.toLowerCase()))
+      dynamicSafeDomains = new Set((data.domains ?? []).map((d: string) => d.toLowerCase()))
+    }
+  } catch { /* fail silently — static list still applies */ }
+}
+
 // ─── NEVER touch these — always keep in inbox ────────────────────────────────
 const SAFE_DOMAINS = new Set([
   'rainsoftse.com', 'rainsoft.com', 'pentair.com', 'dialpad.com',
@@ -42,9 +57,12 @@ function getDomain(email: string): string {
 }
 
 function isSafe(email: Email): boolean {
-  const domain = getDomain(email.senderEmail)
+  const addr = email.senderEmail.toLowerCase()
+  const domain = getDomain(addr)
   if (SAFE_DOMAINS.has(domain)) return true
-  return SAFE_SENDER_FRAGMENTS.some(f => email.senderEmail.toLowerCase().includes(f))
+  if (dynamicSafeEmails.has(addr)) return true
+  if (dynamicSafeDomains.has(domain)) return true
+  return SAFE_SENDER_FRAGMENTS.some(f => addr.includes(f))
 }
 
 function isSpam(email: Email): boolean {

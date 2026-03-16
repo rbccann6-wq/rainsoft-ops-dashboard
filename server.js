@@ -8,6 +8,7 @@ import leadsRoutes from './api/leadsRoutes.js'
 import crmRoutes from './api/crmRoutes.js'
 import billsRoutes from './api/billsRoutes.js'
 import cleanerRoutes from './api/cleanerRoutes.js'
+import safelistRoutes from './api/safelistRoutes.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -24,6 +25,7 @@ app.use('/api', leadsRoutes)
 app.use('/api', crmRoutes)
 app.use('/api', billsRoutes)
 app.use('/api', cleanerRoutes)
+app.use('/api', safelistRoutes)
 
 // Serve built React app
 app.use(express.static(join(__dirname, 'dist')))

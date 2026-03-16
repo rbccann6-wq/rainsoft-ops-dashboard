@@ -115,20 +115,21 @@ export function EmailCleaner() {
     }
   }, [])
 
-  const moveToInbox = useCallback(async (id: string) => {
+  const moveToInbox = useCallback(async (id: string, senderEmail?: string) => {
     setMovingIds(prev => new Set([...prev, id]))
     try {
+      // Use safelist/add — moves to inbox AND adds to permanent safelist + M365 override
       await withRetry(
-        () => apiFetch('/cleaner/move-to-inbox', {
+        () => apiFetch('/safelist/add', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messageId: id }),
+          body: JSON.stringify({ senderEmail, messageId: id }),
         }),
         'move'
       )
       setMovedIds(prev => new Set([...prev, id]))
     } catch {
-      // show nothing on failure — user can retry
+      // best effort
     } finally {
       setMovingIds(prev => { const n = new Set(prev); n.delete(id); return n })
     }
@@ -407,7 +408,7 @@ export function EmailCleaner() {
                           variant="success"
                           size="sm"
                           disabled={movingIds.has(email.id)}
-                          onClick={() => moveToInbox(email.id)}
+                          onClick={() => moveToInbox(email.id, email.senderEmail)}
                         >
                           {movingIds.has(email.id)
                             ? <Loader2 className="w-3 h-3 animate-spin" />
