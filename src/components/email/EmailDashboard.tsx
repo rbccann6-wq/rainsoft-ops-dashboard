@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Mail, Paperclip, RefreshCw } from 'lucide-react'
+import { useState, useEffect, useCallback } from 'react'
+import { Mail, Paperclip, RefreshCw, Loader2, WifiOff } from 'lucide-react'
 import { mockEmails } from '@/data/mock'
 import type { Email, EmailDraft } from '@/types'
 import { Card } from '@/components/ui/Card'
@@ -7,13 +7,37 @@ import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
 import { cn } from '@/lib/utils'
+import { fetchEmails, createDraftReply, sendReply } from '@/lib/emailApi'
 
 export function EmailDashboard() {
-  const [emails, setEmails] = useState<Email[]>(mockEmails)
+  const [emails, setEmails] = useState<Email[]>([])
+  const [loading, setLoading] = useState(true)
+  const [usingMock, setUsingMock] = useState(false)
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null)
   const [composeDraft, setComposeDraft] = useState<Partial<EmailDraft> | null>(null)
   const [drafts, setDrafts] = useState<EmailDraft[]>([])
   const [showDrafts, setShowDrafts] = useState(false)
+  const [savingDraft, setSavingDraft] = useState(false)
+  const [sendingId, setSendingId] = useState<string | null>(null)
+
+  const loadEmails = useCallback(async () => {
+    setLoading(true)
+    try {
+      const data = await fetchEmails()
+      setEmails(data)
+      setUsingMock(false)
+    } catch (err) {
+      console.warn('Email API unavailable, falling back to mock data:', err)
+      setEmails(mockEmails)
+      setUsingMock(true)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadEmails()
+  }, [loadEmails])
 
   const unreadCount = emails.filter((e) => !e.isRead).length
 
@@ -38,19 +62,37 @@ export function EmailDashboard() {
     })
   }
 
-  function saveDraft() {
+  async function saveDraft() {
     if (!composeDraft?.to || !composeDraft?.subject) return
+
+    setSavingDraft(true)
+    let graphDraftId: string | undefined
+
+    if (composeDraft.inReplyTo && !usingMock) {
+      try {
+        const result = await createDraftReply(
+          composeDraft.inReplyTo,
+          composeDraft.body || '',
+        )
+        graphDraftId = result.draftId
+      } catch (err) {
+        console.warn('Could not save draft via API, keeping local only:', err)
+      }
+    }
+
     const draft: EmailDraft = {
       id: `d${Date.now()}`,
       to: composeDraft.to!,
       subject: composeDraft.subject!,
       body: composeDraft.body || '',
       inReplyTo: composeDraft.inReplyTo,
+      graphDraftId,
       status: 'draft',
       createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     }
     setDrafts((prev) => [...prev, draft])
     setComposeDraft(null)
+    setSavingDraft(false)
   }
 
   function approveDraft(id: string) {
@@ -59,10 +101,24 @@ export function EmailDashboard() {
     )
   }
 
-  function sendApproved(id: string) {
+  async function sendApproved(id: string) {
+    const draft = drafts.find((d) => d.id === id)
+    if (!draft) return
+
+    setSendingId(id)
+    if (draft.graphDraftId) {
+      try {
+        await sendReply(draft.graphDraftId)
+      } catch (err) {
+        console.error('Failed to send reply via API:', err)
+        setSendingId(null)
+        return
+      }
+    }
     setDrafts((prev) =>
       prev.map((d) => (d.id === id ? { ...d, status: 'sent' } : d))
     )
+    setSendingId(null)
   }
 
   return (
@@ -75,6 +131,11 @@ export function EmailDashboard() {
           {unreadCount > 0 && (
             <Badge variant="unread">{unreadCount} unread</Badge>
           )}
+          {usingMock && (
+            <span className="flex items-center gap-1 text-xs text-amber-400/80">
+              <WifiOff className="w-3 h-3" /> offline — mock data
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {drafts.length > 0 && (
@@ -82,8 +143,17 @@ export function EmailDashboard() {
               Drafts ({drafts.length})
             </Button>
           )}
-          <Button variant="ghost" size="sm">
-            <RefreshCw className="w-3.5 h-3.5" />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={loadEmails}
+            disabled={loading}
+          >
+            {loading ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="w-3.5 h-3.5" />
+            )}
             <span className="hidden sm:inline">Refresh</span>
           </Button>
           <Button variant="primary" size="sm" onClick={() => openCompose()}>
@@ -94,28 +164,35 @@ export function EmailDashboard() {
 
       {/* Table */}
       <Card>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-800">
-                <th className="text-left px-5 py-3 text-xs text-slate-500 font-medium w-8"></th>
-                <th className="text-left px-3 py-3 text-xs text-slate-500 font-medium">Sender</th>
-                <th className="text-left px-3 py-3 text-xs text-slate-500 font-medium">Subject & Preview</th>
-                <th className="text-left px-3 py-3 text-xs text-slate-500 font-medium hidden md:table-cell">Time</th>
-                <th className="text-left px-3 py-3 text-xs text-slate-500 font-medium w-20">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {emails.map((email) => (
-                <EmailRow
-                  key={email.id}
-                  email={email}
-                  onClick={() => openEmail(email)}
-                />
-              ))}
-            </tbody>
-          </table>
-        </div>
+        {loading && emails.length === 0 ? (
+          <div className="flex items-center justify-center gap-2 py-16 text-slate-500">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            <span className="text-sm">Loading inbox…</span>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-800">
+                  <th className="text-left px-5 py-3 text-xs text-slate-500 font-medium w-8"></th>
+                  <th className="text-left px-3 py-3 text-xs text-slate-500 font-medium">Sender</th>
+                  <th className="text-left px-3 py-3 text-xs text-slate-500 font-medium">Subject & Preview</th>
+                  <th className="text-left px-3 py-3 text-xs text-slate-500 font-medium hidden md:table-cell">Time</th>
+                  <th className="text-left px-3 py-3 text-xs text-slate-500 font-medium w-20">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {emails.map((email) => (
+                  <EmailRow
+                    key={email.id}
+                    email={email}
+                    onClick={() => openEmail(email)}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </Card>
 
       {/* Email Detail Modal */}
@@ -205,8 +282,20 @@ export function EmailDashboard() {
               />
             </div>
             <div className="flex items-center gap-2 pt-1">
-              <Button variant="primary" size="sm" onClick={saveDraft}>
-                Save Draft
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={saveDraft}
+                disabled={savingDraft}
+              >
+                {savingDraft ? (
+                  <>
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    Saving…
+                  </>
+                ) : (
+                  'Save Draft'
+                )}
               </Button>
               <p className="text-xs text-slate-500">
                 Drafts require approval before sending
@@ -250,6 +339,9 @@ export function EmailDashboard() {
                 <pre className="text-xs text-slate-300 whitespace-pre-wrap font-sans line-clamp-3">
                   {draft.body}
                 </pre>
+                {draft.graphDraftId && (
+                  <p className="text-xs text-slate-600">Saved to M365 Drafts</p>
+                )}
                 <div className="flex gap-2 pt-1">
                   {draft.status === 'draft' && (
                     <Button
@@ -264,9 +356,17 @@ export function EmailDashboard() {
                     <Button
                       variant="primary"
                       size="sm"
+                      disabled={sendingId === draft.id}
                       onClick={() => sendApproved(draft.id)}
                     >
-                      Approve & Send
+                      {sendingId === draft.id ? (
+                        <>
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                          Sending…
+                        </>
+                      ) : (
+                        'Approve & Send'
+                      )}
                     </Button>
                   )}
                 </div>

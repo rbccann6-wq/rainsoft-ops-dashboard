@@ -19,6 +19,7 @@ export interface EmailDraft {
   subject: string
   body: string
   inReplyTo?: string
+  graphDraftId?: string
   status: 'draft' | 'approved' | 'sent'
   createdAt: string
 }
