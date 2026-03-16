@@ -33,3 +33,27 @@ export async function fetchSmartMailBatches(): Promise<SmartMailBatch[]> {
     return data.batches ?? []
   }, 'fetchSmartMailBatches')
 }
+
+export async function exportLeadToCrm(lead: ImeLead): Promise<{ success: boolean }> {
+  return withRetry(async () => {
+    const resp = await fetch(`${BASE}/crm/export-lead`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(lead),
+    })
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    return resp.json()
+  }, 'exportLeadToCrm')
+}
+
+export async function exportAllToCrm(leads: ImeLead[]): Promise<{ exported: number; errors: number }> {
+  return withRetry(async () => {
+    const resp = await fetch(`${BASE}/crm/export-all`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ leads }),
+    })
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    return resp.json()
+  }, 'exportAllToCrm')
+}
