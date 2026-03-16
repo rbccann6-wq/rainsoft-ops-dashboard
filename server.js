@@ -6,6 +6,7 @@ import cors from 'cors'
 import emailRoutes from './api/emailRoutes.js'
 import leadsRoutes from './api/leadsRoutes.js'
 import crmRoutes from './api/crmRoutes.js'
+import billsRoutes from './api/billsRoutes.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -20,6 +21,7 @@ app.use(express.json())
 app.use('/api', emailRoutes)
 app.use('/api', leadsRoutes)
 app.use('/api', crmRoutes)
+app.use('/api', billsRoutes)
 
 // Serve built React app
 app.use(express.static(join(__dirname, 'dist')))
