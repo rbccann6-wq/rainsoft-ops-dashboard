@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Mail, Paperclip, RefreshCw, Loader2, WifiOff } from 'lucide-react'
+import { Mail, Paperclip, RefreshCw, Loader2, WifiOff, ShieldAlert, Inbox } from 'lucide-react'
 import { mockEmails } from '@/data/mock'
 import type { Email, EmailDraft } from '@/types'
 import { Card } from '@/components/ui/Card'
@@ -8,9 +8,11 @@ import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
 import { cn } from '@/lib/utils'
 import { fetchEmails, createDraftReply, sendReply } from '@/lib/emailApi'
+import { classifyAll } from '@/lib/spamClassifier'
 
 export function EmailDashboard() {
-  const [emails, setEmails] = useState<Email[]>([])
+  const [allEmails, setAllEmails] = useState<Email[]>([])
+  const [activeTab, setActiveTab] = useState<'inbox' | 'spam-review'>('inbox')
   const [loading, setLoading] = useState(true)
   const [usingMock, setUsingMock] = useState(false)
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null)
@@ -19,16 +21,27 @@ export function EmailDashboard() {
   const [showDrafts, setShowDrafts] = useState(false)
   const [savingDraft, setSavingDraft] = useState(false)
   const [sendingId, setSendingId] = useState<string | null>(null)
+  // IDs manually moved back to inbox from spam review
+  const [restoredIds, setRestoredIds] = useState<Set<string>>(new Set())
+
+  const { inbox: inboxEmails, spamReview: spamEmails } = classifyAll(
+    allEmails.filter(e => !restoredIds.has(e.id))
+  )
+  // Restored emails always go to inbox view
+  const restoredEmails = allEmails.filter(e => restoredIds.has(e.id))
+  const emails = activeTab === 'inbox'
+    ? [...inboxEmails, ...restoredEmails]
+    : spamEmails
 
   const loadEmails = useCallback(async () => {
     setLoading(true)
     try {
       const data = await fetchEmails()
-      setEmails(data)
+      setAllEmails(data)
       setUsingMock(false)
     } catch (err) {
       console.warn('Email API unavailable, falling back to mock data:', err)
-      setEmails(mockEmails)
+      setAllEmails(mockEmails)
       setUsingMock(true)
     } finally {
       setLoading(false)
@@ -39,13 +52,17 @@ export function EmailDashboard() {
     loadEmails()
   }, [loadEmails])
 
-  const unreadCount = emails.filter((e) => !e.isRead).length
+  const unreadCount = inboxEmails.filter((e) => !e.isRead).length
 
   function openEmail(email: Email) {
-    setEmails((prev) =>
+    setAllEmails((prev) =>
       prev.map((e) => (e.id === email.id ? { ...e, isRead: true } : e))
     )
     setSelectedEmail({ ...email, isRead: true })
+  }
+
+  function restoreToInbox(email: Email) {
+    setRestoredIds(prev => new Set([...prev, email.id]))
   }
 
   function openCompose(email?: Email) {
@@ -127,7 +144,7 @@ export function EmailDashboard() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Mail className="w-5 h-5 text-blue-400" />
-          <h2 className="text-lg font-semibold text-white">Email Inbox</h2>
+          <h2 className="text-lg font-semibold text-white">Email</h2>
           {unreadCount > 0 && (
             <Badge variant="unread">{unreadCount} unread</Badge>
           )}
@@ -162,6 +179,51 @@ export function EmailDashboard() {
         </div>
       </div>
 
+      {/* Tabs */}
+      <div className="flex gap-2 border-b border-slate-800">
+        <button
+          onClick={() => setActiveTab('inbox')}
+          className={cn(
+            'flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors',
+            activeTab === 'inbox'
+              ? 'border-blue-500 text-white'
+              : 'border-transparent text-slate-400 hover:text-slate-300'
+          )}
+        >
+          <Inbox className="w-3.5 h-3.5" />
+          Inbox
+          {inboxEmails.length > 0 && (
+            <span className="text-xs bg-blue-900/50 text-blue-300 px-1.5 py-0.5 rounded-full">
+              {inboxEmails.length}
+            </span>
+          )}
+        </button>
+        <button
+          onClick={() => setActiveTab('spam-review')}
+          className={cn(
+            'flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors',
+            activeTab === 'spam-review'
+              ? 'border-amber-500 text-white'
+              : 'border-transparent text-slate-400 hover:text-slate-300'
+          )}
+        >
+          <ShieldAlert className="w-3.5 h-3.5" />
+          Spam Review
+          {spamEmails.length > 0 && (
+            <span className="text-xs bg-amber-900/50 text-amber-300 px-1.5 py-0.5 rounded-full">
+              {spamEmails.length}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {activeTab === 'spam-review' && (
+        <div className="bg-amber-950/20 border border-amber-800/40 rounded-xl p-3 text-xs text-amber-300/80 flex items-start gap-2">
+          <ShieldAlert className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+          These emails were flagged as likely spam or promotions. Nothing is deleted — click "Move to Inbox" on anything that should stay.
+        </div>
+      )}
+
       {/* Table */}
       <Card>
         {loading && emails.length === 0 ? (
@@ -187,6 +249,8 @@ export function EmailDashboard() {
                     key={email.id}
                     email={email}
                     onClick={() => openEmail(email)}
+                    isSpamView={activeTab === 'spam-review'}
+                    onRestore={restoreToInbox}
                   />
                 ))}
               </tbody>
@@ -223,7 +287,20 @@ export function EmailDashboard() {
                 {selectedEmail.body}
               </pre>
             </div>
-            <div className="border-t border-slate-800 pt-4 flex gap-2">
+            <div className="border-t border-slate-800 pt-4 flex gap-2 flex-wrap">
+              {activeTab === 'spam-review' && (
+                <Button
+                  variant="success"
+                  size="sm"
+                  onClick={() => {
+                    restoreToInbox(selectedEmail)
+                    setSelectedEmail(null)
+                  }}
+                >
+                  <Inbox className="w-3 h-3" />
+                  Move to Inbox
+                </Button>
+              )}
               <Button
                 variant="primary"
                 size="sm"
@@ -379,58 +456,72 @@ export function EmailDashboard() {
   )
 }
 
-function EmailRow({ email, onClick }: { email: Email; onClick: () => void }) {
+function EmailRow({
+  email,
+  onClick,
+  isSpamView = false,
+  onRestore,
+}: {
+  email: Email
+  onClick: () => void
+  isSpamView?: boolean
+  onRestore?: (e: Email) => void
+}) {
   return (
     <tr
       onClick={onClick}
       className={cn(
         'border-b border-slate-800/50 cursor-pointer transition-colors',
-        email.isRead
+        isSpamView
+          ? 'bg-amber-950/5 hover:bg-amber-950/10'
+          : email.isRead
           ? 'hover:bg-slate-800/50'
           : 'bg-blue-950/10 hover:bg-blue-950/20'
       )}
     >
       <td className="px-5 py-3">
-        {!email.isRead && (
+        {!email.isRead && !isSpamView && (
           <div className="w-2 h-2 rounded-full bg-blue-400" />
+        )}
+        {isSpamView && (
+          <div className="w-2 h-2 rounded-full bg-amber-500/60" />
         )}
       </td>
       <td className="px-3 py-3">
         <div className="flex items-center gap-2">
-          <div
-            className={cn(
-              'text-sm',
-              email.isRead ? 'text-slate-400' : 'text-white font-medium'
-            )}
-          >
+          <div className={cn('text-sm', isSpamView ? 'text-slate-500' : email.isRead ? 'text-slate-400' : 'text-white font-medium')}>
             {email.sender}
           </div>
           {email.hasAttachment && (
             <Paperclip className="w-3 h-3 text-slate-500 flex-shrink-0" />
           )}
         </div>
-        <div className="text-xs text-slate-500 hidden sm:block truncate max-w-[120px]">
+        <div className="text-xs text-slate-600 hidden sm:block truncate max-w-[120px]">
           {email.senderEmail}
         </div>
       </td>
       <td className="px-3 py-3 max-w-0">
-        <div
-          className={cn(
-            'text-sm truncate',
-            email.isRead ? 'text-slate-300' : 'text-white font-medium'
-          )}
-        >
+        <div className={cn('text-sm truncate', isSpamView ? 'text-slate-500' : email.isRead ? 'text-slate-300' : 'text-white font-medium')}>
           {email.subject}
         </div>
-        <div className="text-xs text-slate-500 truncate">{email.preview}</div>
+        <div className="text-xs text-slate-600 truncate">{email.preview}</div>
       </td>
       <td className="px-3 py-3 text-xs text-slate-500 whitespace-nowrap hidden md:table-cell">
         {email.time}
       </td>
       <td className="px-3 py-3">
-        <Badge variant={email.isRead ? 'read' : 'unread'}>
-          {email.isRead ? 'Read' : 'New'}
-        </Badge>
+        {isSpamView ? (
+          <button
+            onClick={e => { e.stopPropagation(); onRestore?.(email) }}
+            className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 whitespace-nowrap"
+          >
+            <Inbox className="w-3 h-3" /> Move to Inbox
+          </button>
+        ) : (
+          <Badge variant={email.isRead ? 'read' : 'unread'}>
+            {email.isRead ? 'Read' : 'New'}
+          </Badge>
+        )}
       </td>
     </tr>
   )
