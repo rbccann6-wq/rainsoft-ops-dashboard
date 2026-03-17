@@ -15,16 +15,22 @@ const SAFELIST_PATH = path.join(__dirname, '..', 'data', 'safelist.json')
 
 const router = express.Router()
 
-const msalClient = new ConfidentialClientApplication({
-  auth: {
-    clientId: process.env.CLIENT_ID,
-    clientSecret: process.env.CLIENT_SECRET,
-    authority: `https://login.microsoftonline.com/${process.env.TENANT_ID}`,
-  },
-})
+let _msalClient = null
+function getMsalClient() {
+  if (!_msalClient) {
+    _msalClient = new ConfidentialClientApplication({
+      auth: {
+        clientId: process.env.CLIENT_ID,
+        clientSecret: process.env.CLIENT_SECRET,
+        authority: `https://login.microsoftonline.com/${process.env.TENANT_ID}`,
+      },
+    })
+  }
+  return _msalClient
+}
 
 async function getToken() {
-  const r = await msalClient.acquireTokenByClientCredential({
+  const r = await getMsalClient().acquireTokenByClientCredential({
     scopes: ['https://graph.microsoft.com/.default'],
   })
   if (!r?.accessToken) throw new Error('Failed to acquire token')

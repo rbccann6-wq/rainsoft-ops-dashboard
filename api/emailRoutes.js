@@ -5,16 +5,22 @@ const router = express.Router()
 
 // ─── MSAL auth setup ─────────────────────────────────────────────────────────
 
-const msalClient = new ConfidentialClientApplication({
-  auth: {
-    clientId: process.env.CLIENT_ID,
-    clientSecret: process.env.CLIENT_SECRET,
-    authority: `https://login.microsoftonline.com/${process.env.TENANT_ID}`,
-  },
-})
+let _msalClient = null
+function getMsalClient() {
+  if (!_msalClient) {
+    _msalClient = new ConfidentialClientApplication({
+      auth: {
+        clientId: process.env.CLIENT_ID,
+        clientSecret: process.env.CLIENT_SECRET,
+        authority: `https://login.microsoftonline.com/${process.env.TENANT_ID}`,
+      },
+    })
+  }
+  return _msalClient
+}
 
 async function getAccessToken() {
-  const result = await msalClient.acquireTokenByClientCredential({
+  const result = await getMsalClient().acquireTokenByClientCredential({
     scopes: ['https://graph.microsoft.com/.default'],
   })
   if (!result?.accessToken) throw new Error('Failed to acquire access token')

@@ -9,16 +9,22 @@ import { ConfidentialClientApplication } from '@azure/msal-node'
 
 const router = express.Router()
 
-const msalClient = new ConfidentialClientApplication({
-  auth: {
-    clientId: process.env.CLIENT_ID,
-    clientSecret: process.env.CLIENT_SECRET,
-    authority: `https://login.microsoftonline.com/${process.env.TENANT_ID}`,
-  },
-})
+let _msalClient = null
+function getMsalClient() {
+  if (!_msalClient) {
+    _msalClient = new ConfidentialClientApplication({
+      auth: {
+        clientId: process.env.CLIENT_ID,
+        clientSecret: process.env.CLIENT_SECRET,
+        authority: `https://login.microsoftonline.com/${process.env.TENANT_ID}`,
+      },
+    })
+  }
+  return _msalClient
+}
 
 async function getGraphToken() {
-  const result = await msalClient.acquireTokenByClientCredential({
+  const result = await getMsalClient().acquireTokenByClientCredential({
     scopes: ['https://graph.microsoft.com/.default'],
   })
   if (!result?.accessToken) throw new Error('Failed to acquire Graph token')
