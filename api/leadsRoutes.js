@@ -216,7 +216,8 @@ router.get('/leads', async (req, res) => {
         const sb = getSB()
 
         // Check cache first — avoids re-calling IME and Rentcast on every page view
-        const { data: cached } = await sb.from('lowes_leads_cache').select('*').eq('wo_id', woId).single()
+        // Note: .single() returns error (not null) when no row exists — check data explicitly
+        const { data: cached, error: cacheErr } = await sb.from('lowes_leads_cache').select('*').eq('wo_id', woId).maybeSingle()
         if (cached) {
           return {
             woId: cached.wo_id,
