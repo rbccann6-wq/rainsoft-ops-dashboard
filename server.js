@@ -53,9 +53,8 @@ app.listen(PORT, async () => {
 
   // Nightly purge of temp PDF copies (originals stay in M365 inbox)
   try {
-    const { createRequire } = await import('module')
-    const req = createRequire(import.meta.url)
-    const { schedulePurge } = req('/Users/rebeccasbot/Projects/finance-agent/src/pdfPurge')
+    const financeAgentPath = process.env.FINANCE_AGENT_PATH || '/Users/rebeccasbot/Projects/finance-agent'
+    const { schedulePurge } = await import(`${financeAgentPath}/src/pdfPurge.js`)
     schedulePurge()
   } catch { /* finance-agent not available in this env — skip */ }
 })

@@ -284,10 +284,20 @@ async function processNotification(messageId) {
     return
   }
 
-  // Parse + run agent (dynamic import to avoid circular deps)
+  // Parse + run agent (dynamic import — finance-agent may not be available on Render yet)
   try {
-    const { parsePdf } = require('/Users/rebeccasbot/Projects/finance-agent/src/pdfParser')
-    const { runAgent } = require('/Users/rebeccasbot/Projects/finance-agent/src/agent')
+    let parsePdf, runAgent
+    try {
+      const financeAgentPath = process.env.FINANCE_AGENT_PATH || '/Users/rebeccasbot/Projects/finance-agent'
+      const parserMod = await import(`${financeAgentPath}/src/pdfParser.js`)
+      const agentMod = await import(`${financeAgentPath}/src/agent.js`)
+      parsePdf = parserMod.parsePdf
+      runAgent = agentMod.runAgent
+    } catch (importErr) {
+      console.warn('[webhook] Finance agent not available — alerting for manual review:', importErr.message)
+      alert(`📋 FastField credit app received for manual processing. Finance agent not available on this server. Check email for PDF.`)
+      return
+    }
 
     const app = parsePdf(pdfPath)
     console.log(`[webhook] Parsed app: ${app.firstName} ${app.lastName} | $${app.saleAmount} | ${app.leadSource}`)
