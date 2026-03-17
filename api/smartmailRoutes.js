@@ -195,7 +195,7 @@ async function ocrPdfAllPages(pdfPath) {
       'content-type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'claude-opus-4-5',
+      model: 'claude-haiku-4-5',
       max_tokens: 8192,
       messages: [{
         role: 'user',
@@ -281,25 +281,23 @@ router.post('/smartmail/process-batch', async (req, res) => {
   const pdfPath = path.join(DATA_DIR, `${emailId.slice(-8)}.pdf`)
   const imgDir  = path.join(DATA_DIR, `${emailId.slice(-8)}_pages`)
 
-  // Stream progress via SSE or just process and return
-  res.setHeader('Content-Type', 'application/json')
+  // Respond immediately — all work happens in background
+  res.json({ ok: true, batchId: emailId, status: 'processing', message: 'Processing started — check back in 30 seconds' })
 
+  // Everything below runs in background after response is sent
+  ;(async () => {
   try {
     // Download PDF
     const filename = await withRetry(() => downloadPdf(emailId, pdfPath))
-    console.log(`[smartmail] Downloaded ${filename}`)
+    console.log(`[smartmail] Downloaded ${filename} (${(fs.statSync(pdfPath).size/1024).toFixed(0)}KB)`)
 
-    // Acknowledge immediately — process async to avoid Render's 30s timeout
-    res.json({ ok: true, batchId: emailId, status: 'processing', message: 'Processing started — check back in 30 seconds' })
-
-    // Process in background
-    ;(async () => {
+    // OCR with Claude
     let allLeads = []
     try {
       allLeads = await ocrPdfAllPages(pdfPath)
-      console.log(`[smartmail] Claude extracted ${allLeads.length} leads from PDF`)
+      console.log(`[smartmail] Claude extracted ${allLeads.length} leads`)
     } catch (err) {
-      console.error(`[smartmail] OCR failed:`, err.message)
+      console.error(`[smartmail] OCR failed:`, err.message, err.stack?.slice(0,300))
       return
     }
 
@@ -370,10 +368,14 @@ router.post('/smartmail/process-batch', async (req, res) => {
 
     // No images to clean up — Claude reads PDF natively
     console.log(`[smartmail] Batch complete: ${results.length} leads processed`)
-    })().catch(err => console.error('[smartmail] background process error:', err.message))
-
   } catch (err) {
-    console.error('[smartmail] process-batch error:', err.message)
+    console.error('[smartmail] background error:', err.message, err.stack?.slice(0,300))
+  }
+  })().catch(err => console.error('[smartmail] uncaught background error:', err.message))
+
+  // Outer try/catch only fires before res.json — shouldn't happen
+  } catch (err) {
+    console.error('[smartmail] process-batch outer error:', err.message)
     if (!res.headersSent) res.status(500).json({ ok: false, error: err.message })
   }
 })
