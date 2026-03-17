@@ -464,7 +464,7 @@ router.post('/smartmail/push-to-sf/:batchId', async (req, res) => {
         lead.property_owner    ? `Record Owner: ${lead.property_owner}` : null,
         lead.owner_occupied != null ? `Owner-Occupied: ${lead.owner_occupied ? 'Yes' : 'No'}` : null,
         lead.house_value       ? `Est. Value: $${Number(lead.house_value).toLocaleString()}` : null,
-        lead.tax_assessed      ? `Tax Assessed: $${Number(lead.tax_assessed).toLocaleString()}` : null,
+
         lead.last_sale_price   ? `Last Sale: $${Number(lead.last_sale_price).toLocaleString()}${lead.last_sale_date ? ` (${lead.last_sale_date.slice(0,10)})` : ''}` : null,
         lead.sqft              ? `${lead.sqft.toLocaleString()} sqft` : null,
         lead.beds              ? `${lead.beds} bed` : null,
