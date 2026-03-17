@@ -59,7 +59,12 @@ function getDomain(email: string): string {
 function isSafe(email: Email): boolean {
   const addr = email.senderEmail.toLowerCase()
   const domain = getDomain(addr)
+  // Exact domain match
   if (SAFE_DOMAINS.has(domain)) return true
+  // Subdomain match — e.g. mail.rainsoftse.com should be protected same as rainsoftse.com
+  for (const safeDomain of SAFE_DOMAINS) {
+    if (domain.endsWith('.' + safeDomain)) return true
+  }
   if (dynamicSafeEmails.has(addr)) return true
   if (dynamicSafeDomains.has(domain)) return true
   return SAFE_SENDER_FRAGMENTS.some(f => addr.includes(f))

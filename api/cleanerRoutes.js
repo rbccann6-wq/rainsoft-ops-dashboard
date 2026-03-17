@@ -90,7 +90,12 @@ function getDomain(email) {
 
 function isSafe(senderEmail) {
   const domain = getDomain(senderEmail)
-  return SAFE_DOMAINS.has(domain)
+  if (SAFE_DOMAINS.has(domain)) return true
+  // Protect subdomains — e.g. mail.rainsoftse.com is still rainsoftse.com
+  for (const safeDomain of SAFE_DOMAINS) {
+    if (domain.endsWith('.' + safeDomain)) return true
+  }
+  return false
 }
 
 // ─── Scan cache (persisted to disk so it survives server restarts) ────────────
