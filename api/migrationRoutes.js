@@ -6,9 +6,27 @@
  */
 
 import express from 'express'
-import { getDb, withRetry } from './db/index.js'
+import { createClient } from '@supabase/supabase-js'
 
 const router = express.Router()
+
+function getSupabase() {
+  const url = process.env.SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_KEY
+  if (!url || !key) throw new Error('SUPABASE_URL or SUPABASE_SERVICE_KEY not set')
+  return createClient(url, key)
+}
+
+async function withRetry(fn, label, max = 3) {
+  let lastErr
+  for (let i = 1; i <= max; i++) {
+    try { return await fn() } catch (err) {
+      lastErr = err
+      if (i < max) await new Promise(r => setTimeout(r, 1000 * i))
+    }
+  }
+  throw new Error(`[${label}] failed after ${max} attempts: ${lastErr.message}`)
+}
 
 // ─── Salesforce auth (SOAP login, no token needed) ───────────────────────────
 
@@ -114,15 +132,13 @@ async function runPhase1Migration(force = false) {
     errors: [],
   }
 
-  const db = getDb()
+  const supabase = getSupabase()
 
   try {
     // Log start
-    await db.query(`
-      INSERT INTO migration_log (phase, object_type, status, started_at)
-      VALUES ('phase1', 'Account', 'running', NOW())
-      ON CONFLICT DO NOTHING
-    `)
+    await supabase.from('migration_log').upsert({
+      phase: 'phase1', object_type: 'Account', status: 'running', started_at: new Date().toISOString()
+    }, { onConflict: 'phase,object_type' })
 
     const { token, instance } = await getSalesforceSession()
 
@@ -137,12 +153,13 @@ async function runPhase1Migration(force = false) {
     console.log(`[Migration] Phase 1: ${migrationState.total} accounts to migrate`)
 
     // Check if we have existing data (for resume)
-    const existing = await db.query('SELECT COUNT(*) as c FROM sf_accounts')
-    const alreadyMigrated = parseInt(existing.rows[0].c)
+    const { count: alreadyMigrated } = await supabase
+      .from('sf_accounts').select('*', { count: 'exact', head: true })
+    const existing = alreadyMigrated || 0
 
-    if (alreadyMigrated > 0 && !force) {
-      console.log(`[Migration] Resuming from ${alreadyMigrated} already migrated`)
-      migrationState.migrated = alreadyMigrated
+    if (existing > 0 && !force) {
+      console.log(`[Migration] Resuming from ${existing} already migrated`)
+      migrationState.migrated = existing
     }
 
     // Paginate through all accounts
@@ -181,11 +198,10 @@ async function runPhase1Migration(force = false) {
           const placeholders = vals.map((_, i) => `$${i + 1}`)
           const updates = cols.filter(c => c !== 'sf_id').map(c => `${c} = EXCLUDED.${c}`)
 
-          await db.query(
-            `INSERT INTO sf_accounts (${cols.join(',')}) VALUES (${placeholders.join(',')})
-             ON CONFLICT (sf_id) DO UPDATE SET ${updates.join(', ')}`,
-            vals
-          )
+          const { error: upsertErr } = await supabase
+            .from('sf_accounts')
+            .upsert(mapped, { onConflict: 'sf_id' })
+          if (upsertErr) throw new Error(upsertErr.message)
           migrationState.migrated++
           migrationState.lastSfId = record.Id
         } catch (err) {
@@ -206,10 +222,12 @@ async function runPhase1Migration(force = false) {
     }
 
     migrationState.status = 'done'
-    await db.query(`
-      UPDATE migration_log SET status='done', migrated=$1, failed=$2, finished_at=NOW()
-      WHERE phase='phase1' AND object_type='Account'
-    `, [migrationState.migrated, migrationState.failed])
+    await supabase.from('migration_log').update({
+      status: 'done',
+      migrated: migrationState.migrated,
+      failed: migrationState.failed,
+      finished_at: new Date().toISOString()
+    }).eq('phase', 'phase1').eq('object_type', 'Account')
 
     console.log(`[Migration] Phase 1 complete: ${migrationState.migrated} migrated, ${migrationState.failed} failed`)
 
@@ -243,18 +261,17 @@ router.get('/migration/status', (req, res) => {
 // GET /api/migration/accounts — query migrated accounts
 router.get('/migration/accounts', async (req, res) => {
   try {
-    const db = getDb()
+    const supabase = getSupabase()
     const { search, limit = 50, offset = 0 } = req.query
-    let query = 'SELECT * FROM sf_accounts'
-    const params = []
+    let query = supabase.from('sf_accounts').select('*', { count: 'exact' })
     if (search) {
-      params.push(`%${search}%`)
-      query += ` WHERE full_name ILIKE $1 OR phone ILIKE $1 OR email ILIKE $1`
+      query = query.or(`full_name.ilike.%${search}%,phone.ilike.%${search}%,email.ilike.%${search}%`)
     }
-    query += ` ORDER BY last_name, first_name LIMIT ${parseInt(limit)} OFFSET ${parseInt(offset)}`
-    const result = await db.query(query, params)
-    const count = await db.query('SELECT COUNT(*) FROM sf_accounts')
-    res.json({ accounts: result.rows, total: parseInt(count.rows[0].count) })
+    const { data, count, error } = await query
+      .order('last_name').order('first_name')
+      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1)
+    if (error) throw new Error(error.message)
+    res.json({ accounts: data, total: count })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
