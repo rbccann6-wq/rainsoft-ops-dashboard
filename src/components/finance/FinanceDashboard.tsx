@@ -98,6 +98,7 @@ export function FinanceDashboard() {
   const [expandedStops, setExpandedStops] = useState<Set<number>>(new Set())
   const [approving, setApproving]     = useState(false)
   const [actionMsg, setActionMsg]     = useState<string | null>(null)
+  const [selectedPortal, setSelectedPortal] = useState<string>('')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -123,11 +124,16 @@ export function FinanceDashboard() {
   async function approve(run: Run) {
     setApproving(true)
     setActionMsg(null)
+    const portal = selectedPortal || run.portal || 'ispc'
     try {
-      const r = await fetch(`/api/finance-agent/approve/${encodeURIComponent(run.run_id)}`, { method: 'POST' })
+      const r = await fetch(`/api/finance-agent/approve/${encodeURIComponent(run.run_id)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ portal }),
+      })
       const data = await r.json()
       if (!r.ok) throw new Error(data.error || 'Failed')
-      setActionMsg('✅ Submitted! Check the portal for the decision.')
+      setActionMsg(`✅ Submitted to ${portal.toUpperCase()}! Check the portal for the decision.`)
       await load()
     } catch (err) {
       setActionMsg('❌ ' + (err as Error).message)
@@ -294,7 +300,7 @@ export function FinanceDashboard() {
                           </div>
                         </td>
                         <td className="px-3 py-3">
-                          <Button variant="ghost" size="sm" onClick={() => setSelected(run)}>
+                          <Button variant="ghost" size="sm" onClick={() => { setSelected(run); setSelectedPortal(''); setActionMsg(null) }}>
                             View
                           </Button>
                         </td>
@@ -401,18 +407,58 @@ export function FinanceDashboard() {
 
             {/* Approve / Reject for pending_approval */}
             {selected.status === 'pending_approval' && (
-              <div className="border-t border-slate-800 pt-4 space-y-3">
-                <p className="text-sm font-medium text-white">Ready to submit to {(selected.portal || 'ISPC').toUpperCase()}</p>
+              <div className="border-t border-slate-800 pt-4 space-y-4">
+                <p className="text-sm font-semibold text-white">Submit to Finance Portal</p>
+
+                {/* Confirm parsed info */}
+                <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-4 space-y-3 text-sm">
+                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Confirm Parsed Info</p>
+                  <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+                    <ConfirmField label="Applicant"      value={selected.applicant_name} />
+                    <ConfirmField label="Co-Applicant"   value={selected.co_applicant_name} />
+                    <ConfirmField label="Sale Amount"    value={fmt$(selected.sale_amount)} />
+                    <ConfirmField label="Amt Financed"   value={fmt$(selected.amount_financed)} />
+                    <ConfirmField label="Product"        value={selected.product} />
+                    <ConfirmField label="Lead Source"    value={selected.lead_source} />
+                    <ConfirmField label="Promo / Terms"  value={selected.promo} />
+                    <ConfirmField label="Sales Rep"      value={selected.sales_rep} />
+                    <ConfirmField label="Install Date"   value={selected.install_date} />
+                  </div>
+                </div>
+
+                {/* Portal selector */}
+                <div className="space-y-1.5">
+                  <label className="text-xs text-slate-400 font-medium">Finance Company</label>
+                  <select
+                    value={selectedPortal || selected.portal || 'ispc'}
+                    onChange={e => setSelectedPortal(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-violet-500"
+                  >
+                    <option value="ispc">ISPC (default)</option>
+                    <option value="foundation">Foundation Finance</option>
+                    <option value="synchrony">Synchrony</option>
+                    <option value="aquafinance">Aqua Finance (manual approval required)</option>
+                  </select>
+                  {(selectedPortal || selected.portal) === 'aquafinance' && (
+                    <p className="text-xs text-amber-400 flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" /> Aqua Finance requires explicit approval — confirm this is intentional.
+                    </p>
+                  )}
+                </div>
+
                 {actionMsg && (
                   <p className={cn('text-sm', actionMsg.startsWith('✅') ? 'text-emerald-400' : 'text-red-400')}>
                     {actionMsg}
                   </p>
                 )}
+
                 <div className="flex gap-2">
                   <Button variant="success" size="sm" disabled={approving} onClick={() => approve(selected)}>
-                    {approving ? <><Loader2 className="w-3 h-3 animate-spin" /> Submitting…</> : '✅ Approve & Submit'}
+                    {approving
+                      ? <><Loader2 className="w-3 h-3 animate-spin" /> Submitting…</>
+                      : <>✅ Confirm & Submit to {((selectedPortal || selected.portal) || 'ISPC').toUpperCase()}</>}
                   </Button>
-                  <Button variant="danger" size="sm" disabled={approving} onClick={() => reject(selected)}>
+                  <Button variant="ghost" size="sm" disabled={approving} onClick={() => reject(selected)}>
                     Reject
                   </Button>
                 </div>
@@ -431,6 +477,15 @@ function Field({ label, value }: { label: string; value: string | null | undefin
     <div>
       <p className="text-xs text-slate-500">{label}</p>
       <p className="text-sm text-white">{value}</p>
+    </div>
+  )
+}
+
+function ConfirmField({ label, value }: { label: string; value: string | null | undefined }) {
+  return (
+    <div className="flex items-baseline gap-2">
+      <span className="text-xs text-slate-500 w-24 flex-shrink-0">{label}</span>
+      <span className={cn('text-sm', value ? 'text-white' : 'text-slate-600 italic')}>{value || 'not provided'}</span>
     </div>
   )
 }
