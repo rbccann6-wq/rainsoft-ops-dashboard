@@ -534,8 +534,6 @@ router.post('/smartmail/push-to-sf/:batchId', async (req, res) => {
   }
 })
 
-export default router
-
 // ── DEBUG: Test pipeline steps ────────────────────────────────────────────────
 router.get('/smartmail/debug', async (req, res) => {
   const results = { anthropic_key: !!process.env.ANTHROPIC_API_KEY }
@@ -573,3 +571,6 @@ router.get('/smartmail/debug', async (req, res) => {
 
   res.json(results)
 })
+
+export default router
+
