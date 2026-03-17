@@ -75,6 +75,10 @@ export function EmailCleaner() {
   // Locally protected senders (user clicked "Keep" — persisted to safelist)
   const [keptEmails, setKeptEmails] = useState<Set<string>>(new Set())
 
+  // Delete queue — runs one at a time to avoid Graph API rate limits
+  const deleteQueueRef = useRef<string[]>([])
+  const deleteRunningRef = useRef(false)
+
   // Filter/search
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<'all' | 'spam' | 'safe'>('all')
@@ -150,33 +154,58 @@ export function EmailCleaner() {
     } catch { /* best effort — UI already updated */ }
   }, [])
 
-  const deleteSender = useCallback(async (email: string) => {
-    setDeleteStates(s => ({ ...s, [email]: 'deleting' }))
-    try {
-      // Delete can take a while on large senders — single attempt with long timeout
-      const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 120000) // 2 min timeout
-      let result: { deleted: number; failed: number }
+  const runDeleteQueue = useCallback(async () => {
+    if (deleteRunningRef.current) return
+    deleteRunningRef.current = true
+
+    while (deleteQueueRef.current.length > 0) {
+      const email = deleteQueueRef.current[0]
       try {
-        const r = await fetch('/api/cleaner/delete-sender', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ senderEmail: email }),
-          signal: controller.signal,
-        })
-        clearTimeout(timeout)
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        result = await r.json()
-      } finally {
-        clearTimeout(timeout)
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), 180000) // 3 min per sender
+        let result: { deleted: number; failed: number }
+        try {
+          const r = await fetch('/api/cleaner/delete-sender', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ senderEmail: email }),
+            signal: controller.signal,
+          })
+          clearTimeout(timeout)
+          if (!r.ok) throw new Error(`HTTP ${r.status}`)
+          result = await r.json()
+        } finally {
+          clearTimeout(timeout)
+        }
+        setDeleteStates(s => ({ ...s, [email]: result.failed > 0 ? 'error' : 'done' }))
+        setDeleteCounts(s => ({ ...s, [email]: result.deleted }))
+      } catch (err) {
+        console.error('Delete failed:', err)
+        setDeleteStates(s => ({ ...s, [email]: 'error' }))
       }
-      setDeleteStates(s => ({ ...s, [email]: result.failed > 0 ? 'error' : 'done' }))
-      setDeleteCounts(s => ({ ...s, [email]: result.deleted }))
-    } catch (err) {
-      console.error('Delete failed:', err)
-      setDeleteStates(s => ({ ...s, [email]: 'error' }))
+      // Remove from queue and pause briefly before next
+      deleteQueueRef.current = deleteQueueRef.current.slice(1)
+      if (deleteQueueRef.current.length > 0) {
+        await new Promise(r => setTimeout(r, 1500))
+      }
     }
+
+    deleteRunningRef.current = false
   }, [])
+
+  const deleteSender = useCallback((email: string) => {
+    // Mark as queued immediately so UI shows it's pending
+    setDeleteStates(s => {
+      if (s[email] === 'deleting') return s // already running
+      return { ...s, [email]: 'deleting' }
+    })
+    // Add to queue if not already in it
+    if (!deleteQueueRef.current.includes(email)) {
+      deleteQueueRef.current = [...deleteQueueRef.current, email]
+    }
+    // Start queue processor (no-op if already running)
+    runDeleteQueue()
+  }, [runDeleteQueue])
 
   const loadJunk = useCallback(async () => {
     setJunkLoading(true)
