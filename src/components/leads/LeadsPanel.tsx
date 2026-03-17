@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Target, RefreshCw, Loader2, Phone, MapPin, Store, AlertCircle, CheckCircle2, Upload, Download } from 'lucide-react'
 import type { ImeLead, SmartMailBatch } from '@/types'
 import { fetchImeLeads, fetchSmartMailBatches, exportLeadToCrm, exportAllToCrm } from '@/lib/leadsApi'
+import { SmartMailReview } from './SmartMailReview'
 import { Card } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -286,24 +287,11 @@ export function LeadsPanel() {
           )}
           {smartBatches.map(batch => (
             <Card key={batch.emailId}>
-              <div className="p-4 flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-medium text-white">{batch.subject}</p>
-                  <p className="text-xs text-slate-500">{timeAgo(batch.date)}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant="draft">PDF Ready</Badge>
-                  <Button variant="ghost" size="sm" disabled title="OCR coming soon">
-                    <Upload className="w-3 h-3" />
-                    Extract & Push
-                  </Button>
-                </div>
+              <div className="p-4">
+                <SmartMailReview batch={batch} onDone={loadAll} />
               </div>
             </Card>
           ))}
-          <div className="bg-amber-950/30 border border-amber-700/50 rounded-xl p-4 text-sm text-amber-300">
-            🔬 OCR extraction coming soon — Google Vision will auto-parse these card scans into structured leads and push them to CRM.
-          </div>
         </div>
       )}
     </div>
