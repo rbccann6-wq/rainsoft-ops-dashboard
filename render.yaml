@@ -2,7 +2,7 @@ services:
   - type: web
     name: rainsoft-ops-dashboard
     runtime: node
-    buildCommand: npm install --legacy-peer-deps && npm run build
+    buildCommand: npm install --legacy-peer-deps && npm run build && pip3 install pdfplumber pillow --quiet
     startCommand: node server.js
     envVars:
       - key: NODE_VERSION
