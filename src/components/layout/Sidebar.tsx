@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { Mail, Bot, Megaphone, FlaskConical, LayoutDashboard, Target, Receipt, Trash2 } from 'lucide-react'
+import { Mail, Bot, Megaphone, FlaskConical, LayoutDashboard, Target, Receipt, Trash2, DollarSign } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const navItems = [
@@ -11,6 +11,7 @@ const navItems = [
   { to: '/leads', icon: Target, label: 'Leads' },
   { to: '/bills', icon: Receipt, label: 'Bills' },
   { to: '/cleaner', icon: Trash2, label: 'Cleaner' },
+  { to: '/costs', icon: DollarSign, label: 'Costs' },
 ]
 
 export function Sidebar() {

@@ -9,6 +9,7 @@ import { ResearchFeed } from '@/components/research/ResearchFeed'
 import { LeadsPanel } from '@/components/leads/LeadsPanel'
 import { BillsTracker } from '@/components/bills/BillsTracker'
 import { EmailCleaner } from '@/components/cleaner/EmailCleaner'
+import { CostMonitor } from '@/components/agents/CostMonitor'
 import { mockQuickStats } from '@/data/mock'
 
 export default function App() {
@@ -28,6 +29,7 @@ export default function App() {
               <Route path="/leads" element={<LeadsPanel />} />
               <Route path="/bills" element={<BillsTracker />} />
               <Route path="/cleaner" element={<EmailCleaner />} />
+              <Route path="/costs" element={<CostMonitor />} />
             </Routes>
           </main>
         </div>
