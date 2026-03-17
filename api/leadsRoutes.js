@@ -237,7 +237,7 @@ router.get('/leads', async (req, res) => {
 // ─── Salesforce auto-sync ─────────────────────────────────────────────────────
 
 const SF_INSTANCE = 'https://rainsoftse.my.salesforce.com'
-const NON_CUSTOMER_RT = '0121Q000001A2BOQA0'
+const LOWES_LEAD_RT = '012Rl000007imrJIAQ'
 let sfToken = null
 let sfTokenExpiry = 0
 
@@ -279,9 +279,9 @@ async function syncLeadsToSalesforce(leads) {
   for (const lead of leads) {
     if (!lead.woId) continue
     try {
-      // Check if already synced
+      // Check if already synced (check Leads object)
       const existing = await sfQuery(
-        `SELECT Id FROM Account WHERE Important_Notes_Details__c LIKE '%WO#${lead.woId}%' LIMIT 1`
+        `SELECT Id FROM Lead WHERE Important_Details_Notes__c LIKE '%WO#${lead.woId}%' LIMIT 1`
       )
       if (existing.totalSize > 0) continue
 
@@ -289,26 +289,36 @@ async function syncLeadsToSalesforce(leads) {
       const firstName = nameParts[0] || ''
       const lastName = nameParts.slice(1).join(' ') || firstName
 
+      // Parse address into components
+      const addr = (lead.address || '').trim()
+      const addrMatch = addr.match(/^(.*?)\s+([A-Za-z\s]+)\s+([A-Z]{2})\s+(\d{5})$/)
+
       const record = {
-        RecordTypeId: NON_CUSTOMER_RT,
+        RecordTypeId: LOWES_LEAD_RT,
         FirstName: firstName,
         LastName: lastName,
-        AccountSource: 'Lowes',
-        PersonLeadSource: 'Lowes',
+        LeadSource: 'Lowes',
+        Lead_Source_Specific__c: 'Lowes',
         Gift__c: 'Other',
-        Phone: (lead.phone || '').replace(/\D/g, ''),
-        PersonEmail: lead.email || '',
-        Important_Notes_Details__c: `Direct Lowe's Lead | WO#${lead.woId} | Store: ${lead.store || ''}`,
-        Lead_Status__c: 'NEW LEAD',
-      }
-      if (lead.address) {
-        record.BillingStreet = lead.address
-        record.PersonMailingStreet = lead.address
+        Phone: lead.phone || '',
+        Email: lead.email || '',
+        Status: 'New',
+        Important_Details_Notes__c: `Direct Lowe's Lead | WO#${lead.woId} | Store: ${lead.store || ''}`,
+        CountryCode: 'US',
       }
 
-      const result = await sfCreate('Account', record)
+      if (addrMatch) {
+        record.Street     = addrMatch[1].trim()
+        record.City       = addrMatch[2].trim()
+        record.StateCode  = addrMatch[3].trim()
+        record.PostalCode = addrMatch[4].trim()
+      } else if (addr) {
+        record.Street = addr
+      }
+
+      const result = await sfCreate('Lead', record)
       if (result.success) {
-        console.log(`[SF sync] Created: ${lead.customerName} WO#${lead.woId} → ${result.id}`)
+        console.log(`[SF sync] Created Lead: ${lead.customerName} WO#${lead.woId} → ${result.id}`)
         created++
       } else {
         console.warn(`[SF sync] Failed ${lead.woId}:`, JSON.stringify(result).slice(0, 150))
