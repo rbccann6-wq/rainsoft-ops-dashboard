@@ -11,6 +11,7 @@ import cleanerRoutes from './api/cleanerRoutes.js'
 import safelistRoutes from './api/safelistRoutes.js'
 import usageRoutes from './api/usageRoutes.js'
 import migrationRoutes from './api/migrationRoutes.js'
+import webhookRoutes, { ensureSubscription } from './api/webhookRoutes.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -30,6 +31,7 @@ app.use('/api', cleanerRoutes)
 app.use('/api', safelistRoutes)
 app.use('/api', usageRoutes)
 app.use('/api', migrationRoutes)
+app.use('/api', webhookRoutes)
 
 // Serve built React app
 app.use(express.static(join(__dirname, 'dist')))
@@ -41,4 +43,10 @@ app.get('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`RainSoft Ops Dashboard running on port ${PORT}`)
+  // Register/renew Graph webhook subscription for FastField emails
+  ensureSubscription().catch(err => console.error('Webhook setup failed:', err.message))
+  // Auto-renew every 2 days (subscriptions expire after 3)
+  setInterval(() => {
+    ensureSubscription().catch(err => console.error('Webhook renewal failed:', err.message))
+  }, 2 * 24 * 60 * 60 * 1000)
 })
