@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Target, RefreshCw, Loader2, Phone, MapPin, Store, AlertCircle, CheckCircle2, Upload, Download } from 'lucide-react'
 import type { ImeLead, SmartMailBatch } from '@/types'
 import { fetchImeLeads, fetchSmartMailBatches, exportLeadToCrm, exportAllToCrm } from '@/lib/leadsApi'
@@ -7,6 +7,9 @@ import { Card } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
+
+// Module-level cache — survives tab switching, cleared only on explicit Refresh
+let _leadsCache: { leads: ImeLead[]; batches: SmartMailBatch[]; loadedAt: number } | null = null
 
 function timeAgo(iso: string) {
   const diff = Date.now() - new Date(iso).getTime()
@@ -30,7 +33,14 @@ export function LeadsPanel() {
   const [bulkResult, setBulkResult] = useState<{ exported: number; errors: number } | null>(null)
   const [activeTab, setActiveTab] = useState<'lowes' | 'smartmail'>('lowes')
 
-  const loadAll = useCallback(async () => {
+  const loadAll = useCallback(async (forceRefresh = false) => {
+    // Use cache if available and not forcing refresh
+    if (!forceRefresh && _leadsCache) {
+      setImeLeads(_leadsCache.leads)
+      setSmartBatches(_leadsCache.batches)
+      setLoading(false)
+      return
+    }
     setLoading(true)
     setError(null)
     try {
@@ -38,6 +48,7 @@ export function LeadsPanel() {
         fetchImeLeads(),
         fetchSmartMailBatches(),
       ])
+      _leadsCache = { leads: imeData.leads, batches: smartData, loadedAt: Date.now() }
       setImeLeads(imeData.leads)
       setSmartBatches(smartData)
     } catch (err) {
@@ -47,7 +58,8 @@ export function LeadsPanel() {
     }
   }, [])
 
-  useEffect(() => { loadAll() }, [loadAll])
+  // Load on mount — uses cache if available, no re-fetch on tab switch
+  useEffect(() => { loadAll(false) }, [loadAll])
 
   const pendingCount = imeLeads.filter(l => !contacted.has(l.woId)).length
 
@@ -105,7 +117,12 @@ export function LeadsPanel() {
               <span className="hidden sm:inline">Export All to CRM</span>
             </Button>
           )}
-          <Button variant="ghost" size="sm" onClick={loadAll} disabled={loading}>
+          {_leadsCache && !loading && (
+            <span className="text-xs text-slate-600 hidden sm:inline">
+              loaded {timeAgo(new Date(_leadsCache.loadedAt).toISOString())}
+            </span>
+          )}
+          <Button variant="ghost" size="sm" onClick={() => loadAll(true)} disabled={loading}>
             {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
             <span className="hidden sm:inline">Refresh</span>
           </Button>
