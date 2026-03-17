@@ -277,108 +277,87 @@ router.post('/smartmail/process-batch', async (req, res) => {
 
   await ensureTable()
   fs.mkdirSync(DATA_DIR, { recursive: true })
+  const pdfPath = path.join(DATA_DIR, `${emailId.slice(-8).replace(/[^a-zA-Z0-9]/g,'_')}.pdf`)
 
-  const pdfPath = path.join(DATA_DIR, `${emailId.slice(-8)}.pdf`)
-  const imgDir  = path.join(DATA_DIR, `${emailId.slice(-8)}_pages`)
-
-  // Respond immediately — all work happens in background
+  // Respond immediately — processing happens async
   res.json({ ok: true, batchId: emailId, status: 'processing', message: 'Processing started — check back in 30 seconds' })
 
-  // Everything below runs in background after response is sent
-  ;(async () => {
-  try {
-    // Download PDF
-    const filename = await withRetry(() => downloadPdf(emailId, pdfPath))
-    console.log(`[smartmail] Downloaded ${filename} (${(fs.statSync(pdfPath).size/1024).toFixed(0)}KB)`)
-
-    // OCR with Claude
-    let allLeads = []
+  // Background processing
+  setImmediate(async () => {
     try {
-      allLeads = await ocrPdfAllPages(pdfPath)
-      console.log(`[smartmail] Claude extracted ${allLeads.length} leads`)
-    } catch (err) {
-      console.error(`[smartmail] OCR failed:`, err.message, err.stack?.slice(0,300))
-      return
-    }
+      const filename = await withRetry(() => downloadPdf(emailId, pdfPath))
+      console.log(`[smartmail] Downloaded ${filename} (${(fs.statSync(pdfPath).size/1024).toFixed(0)}KB)`)
 
-    const sb = getSB()
-    const results = []
+      const allLeads = await ocrPdfAllPages(pdfPath)
+      console.log(`[smartmail] Extracted ${allLeads.length} leads`)
 
-    for (let i = 0; i < allLeads.length; i++) {
-      const lead = allLeads[i]
-      if (!lead?.full_name) continue
+      const sb = getSB()
+      let saved = 0
 
-      // Verify: card cross-check + area code + email DNS
-      const v = await verify(lead, lead.printed_name, lead.printed_address)
-      const conf = v.confidence
+      for (let i = 0; i < allLeads.length; i++) {
+        const lead = allLeads[i]
+        if (!lead?.full_name) continue
 
-      // Rentcast: property record + estimated value
-      const rentcast = await getRentcastData(lead.address, lead.city, lead.state, lead.zip)
+        const v = await verify(lead, lead.printed_name, lead.printed_address)
+        const rentcast = await getRentcastData(lead.address, lead.city, lead.state, lead.zip)
 
-      const row = {
-        batch_id: emailId,
-        batch_subject: subject || filename,
-        page_number: i + 1,
-        full_name: lead.full_name,
-        address: lead.address,
-        city: lead.city,
-        state: lead.state,
-        zip: lead.zip,
-        phone: lead.phone,
-        email: lead.email,
-        water_source: lead.water_source,
-        buys_bottled_water: lead.buys_bottled_water,
-        water_conditions: lead.water_conditions?.join(', ') || null,
-        water_quality: lead.water_quality,
-        filtration: lead.filtration?.join(', ') || null,
-        tds: lead.tds,
-        hd: lead.hd,
-        ph: lead.ph,
-        name_match: v.name_match,
-        addr_match: v.addr_match,
-        phone_valid: v.phone_valid,
-        email_valid: v.email_valid,
-        area_code_match: v.area_code_match,
-        brave_snippet: v.score,
-        confidence: conf,
-        printed_name: lead.printed_name || null,
-        printed_address: lead.printed_address || null,
-        homeowner: lead.homeowner || null,
-        sample_date: lead.sample_date || null,
-        house_value: rentcast?.price || null,
-        house_value_low: rentcast?.low || null,
-        house_value_high: rentcast?.high || null,
-        property_owner: rentcast?.owner || null,
-        owner_occupied: rentcast?.ownerOccupied ?? null,
-        tax_assessed: rentcast?.taxAssessed || null,
-        last_sale_date: rentcast?.lastSaleDate || null,
-        last_sale_price: rentcast?.lastSalePrice || null,
-        sqft: rentcast?.sqft || null,
-        beds: rentcast?.beds || null,
-        baths: rentcast?.baths || null,
-        year_built: rentcast?.yearBuilt || null,
-                status: lead.homeowner === 'No' ? 'no_homeowner' : 'pending',
-        ocr_raw: null,
+        const row = {
+          batch_id: emailId,
+          batch_subject: subject || filename,
+          page_number: i + 1,
+          full_name: lead.full_name,
+          address: lead.address,
+          city: lead.city,
+          state: lead.state,
+          zip: lead.zip,
+          phone: lead.phone,
+          email: lead.email,
+          water_source: lead.water_source,
+          buys_bottled_water: lead.buys_bottled_water,
+          homeowner: lead.homeowner,
+          water_conditions: Array.isArray(lead.water_conditions) ? lead.water_conditions.join(', ') : lead.water_conditions,
+          water_quality: lead.water_quality,
+          filtration: Array.isArray(lead.filtration) ? lead.filtration.join(', ') : lead.filtration,
+          tds: lead.tds != null ? Number(lead.tds) : null,
+          hd: lead.hd != null ? Number(lead.hd) : null,
+          ph: lead.ph != null ? Number(lead.ph) : null,
+          sample_date: lead.sample_date,
+          printed_name: lead.printed_name,
+          printed_address: lead.printed_address,
+          name_match: v.name_match,
+          addr_match: v.addr_match,
+          phone_valid: v.phone_valid,
+          email_valid: v.email_valid,
+          area_code_match: v.area_code_match,
+          brave_snippet: v.score,
+          confidence: v.confidence,
+          house_value: rentcast?.price || null,
+          house_value_low: rentcast?.low || null,
+          house_value_high: rentcast?.high || null,
+          property_owner: rentcast?.owner || null,
+          owner_occupied: rentcast?.ownerOccupied ?? null,
+          last_sale_date: rentcast?.lastSaleDate || null,
+          last_sale_price: rentcast?.lastSalePrice || null,
+          sqft: rentcast?.sqft || null,
+          beds: rentcast?.beds || null,
+          baths: rentcast?.baths || null,
+          year_built: rentcast?.yearBuilt || null,
+          status: lead.homeowner === 'No' ? 'no_homeowner' : 'pending',
+          ocr_raw: null,
+        }
+
+        const { error } = await sb.from('smartmail_leads').insert(row)
+        if (error) console.error(`[smartmail] Insert error page ${i+1}:`, error.message)
+        else saved++
       }
 
-      const { data, error } = await sb.from('smartmail_leads').insert(row).select('id').single()
-      if (error) console.error('[smartmail] DB insert error:', error.message)
-      else results.push({ ...row, id: data.id })
+      console.log(`[smartmail] Done: ${saved}/${allLeads.length} leads saved`)
+    } catch (err) {
+      console.error('[smartmail] Background error:', err.message, err.stack?.slice(0, 300))
     }
-
-    // No images to clean up — Claude reads PDF natively
-    console.log(`[smartmail] Batch complete: ${results.length} leads processed`)
-  } catch (err) {
-    console.error('[smartmail] background error:', err.message, err.stack?.slice(0,300))
-  }
-  })().catch(err => console.error('[smartmail] uncaught background error:', err.message))
-
-  // Outer try/catch only fires before res.json — shouldn't happen
-  } catch (err) {
-    console.error('[smartmail] process-batch outer error:', err.message)
-    if (!res.headersSent) res.status(500).json({ ok: false, error: err.message })
-  }
+  })
 })
+
 
 // GET /api/smartmail/batches
 router.get('/smartmail/batches', async (req, res) => {
