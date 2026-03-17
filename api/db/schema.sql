@@ -167,3 +167,72 @@ CREATE INDEX IF NOT EXISTS idx_deals_finance_company ON deals(finance_company);
 CREATE INDEX IF NOT EXISTS idx_batch_deposits_company ON batch_deposits(finance_company);
 CREATE INDEX IF NOT EXISTS idx_batch_deposits_date ON batch_deposits(deposit_date);
 CREATE INDEX IF NOT EXISTS idx_batch_deposit_deals_batch ON batch_deposit_deals(batch_deposit_id);
+
+-- ─── Salesforce Migration Tables ─────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS sf_accounts (
+  id                    SERIAL PRIMARY KEY,
+  sf_id                 TEXT UNIQUE NOT NULL,
+  customer_number       TEXT,
+  first_name            TEXT,
+  middle_name           TEXT,
+  last_name             TEXT,
+  full_name             TEXT,
+  email                 TEXT,
+  phone                 TEXT,
+  all_phones            TEXT,
+  street                TEXT,
+  city                  TEXT,
+  state                 TEXT,
+  zip                   TEXT,
+  country               TEXT,
+  lat                   NUMERIC,
+  lng                   NUMERIC,
+  lead_source           TEXT,
+  account_source        TEXT,
+  status                TEXT,
+  lead_status           TEXT,
+  sales_rep             TEXT,
+  is_hd_deal            BOOLEAN,
+  region                TEXT,
+  water_source          TEXT,
+  water_conditions      TEXT,
+  water_filters         TEXT,
+  hardness_level        NUMERIC,
+  tds_level             NUMERIC,
+  homeowner             TEXT,
+  type_of_home          TEXT,
+  house_value           NUMERIC,
+  no_in_household       NUMERIC,
+  bottled_water         TEXT,
+  mr_job                TEXT,
+  mrs_job               TEXT,
+  kids_other            TEXT,
+  appointment_date      DATE,
+  gift                  TEXT,
+  install_pic           TEXT,
+  customer_info         TEXT,
+  created_date          TIMESTAMPTZ,
+  last_modified_date    TIMESTAMPTZ,
+  last_activity_date    DATE,
+  migrated_at           TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS migration_log (
+  id            SERIAL PRIMARY KEY,
+  phase         TEXT NOT NULL,
+  object_type   TEXT NOT NULL,
+  total_records INTEGER,
+  migrated      INTEGER DEFAULT 0,
+  failed        INTEGER DEFAULT 0,
+  status        TEXT DEFAULT 'pending',  -- pending | running | done | error
+  started_at    TIMESTAMPTZ,
+  finished_at   TIMESTAMPTZ,
+  last_sf_id    TEXT,
+  error_msg     TEXT,
+  created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_sf_accounts_sf_id ON sf_accounts(sf_id);
+CREATE INDEX IF NOT EXISTS idx_sf_accounts_last_name ON sf_accounts(last_name);
+CREATE INDEX IF NOT EXISTS idx_sf_accounts_phone ON sf_accounts(phone);
