@@ -192,6 +192,21 @@ export async function ensureSubscription() {
   }
 }
 
+// ── Finance agent run logger ─────────────────────────────────────────────────
+
+async function logRun(data) {
+  try {
+    const port = process.env.PORT || 3000
+    await fetch(`http://localhost:${port}/api/finance-agent/log`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+  } catch (e) {
+    console.warn('[webhook] logRun failed:', e.message)
+  }
+}
+
 // ── Alert helper ──────────────────────────────────────────────────────────────
 
 function alert(text) {
@@ -321,6 +336,31 @@ async function processNotification(messageId) {
     } else {
       alert(`⚠️ Credit app for ${name} (${amount}) — unexpected result. Check finance-agent logs.`)
     }
+
+    // Log to finance agent dashboard
+    await logRun({
+      run_id:            `${messageId}-${Date.now()}`,
+      applicant_name:    name,
+      co_applicant_name: app.coApp?.firstName ? `${app.coApp.firstName} ${app.coApp.lastName}` : null,
+      sale_amount:       app.saleAmount,
+      amount_financed:   app.amountFinanced,
+      product:           app.product,
+      lead_source:       app.leadSource,
+      promo:             app.promo,
+      portal:            result.portal || null,
+      status:            !result.ok && result.stops?.length ? 'stopped'
+                         : result.skipped ? 'skipped'
+                         : result.ok ? (result.status || 'submitted')
+                         : 'error',
+      stops:             result.stops?.length ? result.stops : null,
+      skip_reason:       result.skipReason || null,
+      result_summary:    result.result || null,
+      sales_rep:         app.salesRep || null,
+      install_date:      app.installDate || null,
+      email_subject:     msg.subject || null,
+      email_received_at: msg.receivedDateTime || null,
+      error_message:     result.error || null,
+    })
   } catch (err) {
     console.error(`[webhook] Agent run failed:`, err.message)
     alert(`❌ Finance agent failed for credit app: ${err.message}. Check logs.`)

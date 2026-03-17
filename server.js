@@ -12,6 +12,7 @@ import safelistRoutes from './api/safelistRoutes.js'
 import usageRoutes from './api/usageRoutes.js'
 import migrationRoutes from './api/migrationRoutes.js'
 import webhookRoutes, { ensureSubscription } from './api/webhookRoutes.js'
+import financeAgentRoutes from './api/financeAgentRoutes.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -32,6 +33,7 @@ app.use('/api', safelistRoutes)
 app.use('/api', usageRoutes)
 app.use('/api', migrationRoutes)
 app.use('/api', webhookRoutes)
+app.use('/api', financeAgentRoutes)
 
 // Serve built React app
 app.use(express.static(join(__dirname, 'dist')))

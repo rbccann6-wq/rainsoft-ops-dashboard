@@ -10,6 +10,7 @@ import { LeadsPanel } from '@/components/leads/LeadsPanel'
 import { BillsTracker } from '@/components/bills/BillsTracker'
 import { EmailCleaner } from '@/components/cleaner/EmailCleaner'
 import { CostMonitor } from '@/components/agents/CostMonitor'
+import { FinanceDashboard } from '@/components/finance/FinanceDashboard'
 import { mockQuickStats } from '@/data/mock'
 
 export default function App() {
@@ -30,6 +31,7 @@ export default function App() {
               <Route path="/bills" element={<BillsTracker />} />
               <Route path="/cleaner" element={<EmailCleaner />} />
               <Route path="/costs" element={<CostMonitor />} />
+              <Route path="/finance" element={<FinanceDashboard />} />
             </Routes>
           </main>
         </div>
