@@ -2,6 +2,14 @@ import express from 'express'
 import https from 'https'
 import http from 'http'
 import { ConfidentialClientApplication } from '@azure/msal-node'
+import { createClient } from '@supabase/supabase-js'
+
+function getSB() {
+  return createClient(
+    process.env.SUPABASE_URL || 'https://njqavagyuwdmkeyoscbz.supabase.co',
+    process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5qcWF2YWd5dXdkbWtleW9zY2J6Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Mzc1NTM4MywiZXhwIjoyMDg5MzMxMzgzfQ.67pxlJAlqIKgTgDwpoDBcQZ12ezT3ZPbQRXsBnRptPs'
+  )
+}
 
 const router = express.Router()
 
@@ -205,10 +213,45 @@ router.get('/leads', async (req, res) => {
     // Fetch WO details (cap at 10 to avoid hammering IME)
     const leads = await Promise.allSettled(
       woEmails.slice(0, 10).map(async ({ email, woId }) => {
+        const sb = getSB()
+
+        // Check cache first — avoids re-calling IME and Rentcast on every page view
+        const { data: cached } = await sb.from('lowes_leads_cache').select('*').eq('wo_id', woId).single()
+        if (cached) {
+          return {
+            woId: cached.wo_id,
+            customerName: cached.customer_name,
+            phone: cached.phone,
+            officePhone: cached.office_phone,
+            email: cached.email,
+            address: cached.address,
+            store: cached.store,
+            status: cached.status,
+            emailDate: email.receivedDateTime,
+            emailId: email.id,
+            rentcast: cached.rentcast,
+            sfLeadId: cached.sf_lead_id || null,
+          }
+        }
+
+        // Not cached — fetch from IME + Rentcast
         const wo = await fetchWorkOrder(woId)
-        // Parse address for Rentcast
         const addrParsed = parseAddress(wo.address)
         const rentcast = await getRentcastData(addrParsed.street, addrParsed.city, addrParsed.state, addrParsed.zip).catch(() => null)
+
+        // Save to cache
+        await sb.from('lowes_leads_cache').upsert({
+          wo_id: woId,
+          customer_name: wo.customerName,
+          phone: wo.phone,
+          office_phone: wo.officePhone,
+          email: wo.email,
+          address: wo.address,
+          store: wo.store,
+          status: wo.status,
+          rentcast: rentcast || null,
+        }, { onConflict: 'wo_id' }).catch(() => {})
+
         return {
           ...wo,
           emailDate: email.receivedDateTime,
@@ -337,15 +380,22 @@ async function syncLeadsToSalesforce(leads) {
   let created = 0
   const sfIdMap = {}  // woId → sfLeadId
 
-  // First pass: look up any already-synced leads
+  // First pass: check cache for SF IDs (avoids SF queries on every load)
+  const sb = getSB()
   for (const lead of leads) {
     if (!lead.woId) continue
+    // Check cache first
+    if (lead.sfLeadId) { sfIdMap[lead.woId] = lead.sfLeadId; continue }
     try {
+      const { data: cached } = await sb.from('lowes_leads_cache').select('sf_lead_id').eq('wo_id', lead.woId).single()
+      if (cached?.sf_lead_id) { sfIdMap[lead.woId] = cached.sf_lead_id; continue }
+      // Fall back to SF query
       const existing = await sfQuery(
         `SELECT Id FROM Lead WHERE Important_Details_Notes__c LIKE '%WO#${lead.woId}%' LIMIT 1`
       )
       if (existing.totalSize > 0) {
         sfIdMap[lead.woId] = existing.records[0].Id
+        sb.from('lowes_leads_cache').update({ sf_lead_id: existing.records[0].Id }).eq('wo_id', lead.woId).catch(() => {})
       }
     } catch {}
   }
@@ -402,6 +452,8 @@ async function syncLeadsToSalesforce(leads) {
         console.log(`[SF sync] Created Lead: ${lead.customerName} WO#${lead.woId} → ${result.id}`)
         sfIdMap[lead.woId] = result.id
         created++
+        // Update cache with SF lead ID
+        getSB().from('lowes_leads_cache').update({ sf_lead_id: result.id }).eq('wo_id', lead.woId).catch(() => {})
       } else {
         console.warn(`[SF sync] Failed ${lead.woId}:`, JSON.stringify(result).slice(0, 150))
       }
