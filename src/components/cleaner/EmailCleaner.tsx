@@ -138,17 +138,27 @@ export function EmailCleaner() {
   const deleteSender = useCallback(async (email: string) => {
     setDeleteStates(s => ({ ...s, [email]: 'deleting' }))
     try {
-      const result = await withRetry(
-        () => apiFetch<{ deleted: number; failed: number }>('/cleaner/delete-sender', {
+      // Delete can take a while on large senders — single attempt with long timeout
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 120000) // 2 min timeout
+      let result: { deleted: number; failed: number }
+      try {
+        const r = await fetch('/api/cleaner/delete-sender', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ senderEmail: email }),
-        }),
-        'delete'
-      )
+          signal: controller.signal,
+        })
+        clearTimeout(timeout)
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        result = await r.json()
+      } finally {
+        clearTimeout(timeout)
+      }
       setDeleteStates(s => ({ ...s, [email]: result.failed > 0 ? 'error' : 'done' }))
       setDeleteCounts(s => ({ ...s, [email]: result.deleted }))
-    } catch {
+    } catch (err) {
+      console.error('Delete failed:', err)
       setDeleteStates(s => ({ ...s, [email]: 'error' }))
     }
   }, [])
