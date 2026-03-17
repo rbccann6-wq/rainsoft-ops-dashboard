@@ -535,3 +535,41 @@ router.post('/smartmail/push-to-sf/:batchId', async (req, res) => {
 })
 
 export default router
+
+// ── DEBUG: Test pipeline steps ────────────────────────────────────────────────
+router.get('/smartmail/debug', async (req, res) => {
+  const results = { anthropic_key: !!process.env.ANTHROPIC_API_KEY }
+  
+  // Test 1: Supabase write
+  try {
+    const sb = getSB()
+    const { data, error } = await sb.from('smartmail_leads').insert({
+      batch_id: 'DEBUG-' + Date.now(), batch_subject: 'debug', page_number: 1,
+      full_name: 'Debug Test', status: 'pending'
+    }).select('id').single()
+    if (error) results.supabase = 'ERROR: ' + error.message
+    else {
+      results.supabase = 'OK id=' + data.id
+      await sb.from('smartmail_leads').delete().eq('id', data.id)
+    }
+  } catch(e) { results.supabase = 'THROW: ' + e.message }
+  
+  // Test 2: Claude API
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'claude-haiku-4-5', max_tokens: 10, messages: [{role:'user',content:'say ok'}] })
+    })
+    const d = await r.json()
+    results.claude = r.ok ? ('OK: ' + d.content?.[0]?.text) : ('ERROR ' + r.status + ': ' + JSON.stringify(d.error))
+  } catch(e) { results.claude = 'THROW: ' + e.message }
+
+  // Test 3: Graph token
+  try {
+    await getGraphToken()
+    results.graph = 'OK'
+  } catch(e) { results.graph = 'ERROR: ' + e.message }
+
+  res.json(results)
+})
