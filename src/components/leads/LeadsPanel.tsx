@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Target, RefreshCw, Loader2, Phone, MapPin, Store, AlertCircle, CheckCircle2, Upload, Download } from 'lucide-react'
 import type { ImeLead, SmartMailBatch } from '@/types'
 import { fetchImeLeads, fetchSmartMailBatches, exportLeadToCrm, exportAllToCrm } from '@/lib/leadsApi'
@@ -122,7 +122,7 @@ export function LeadsPanel() {
               loaded {timeAgo(new Date(_leadsCache.loadedAt).toISOString())}
             </span>
           )}
-          <Button variant="ghost" size="sm" onClick={() => loadAll(true)} disabled={loading}>
+          <Button variant="ghost" size="sm" onClick={() => { loadAll(true) }} disabled={loading}>
             {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
             <span className="hidden sm:inline">Refresh</span>
           </Button>
@@ -137,7 +137,7 @@ export function LeadsPanel() {
             <p className="text-sm font-semibold text-red-300">Failed to load leads</p>
             <p className="text-xs text-slate-400 mt-0.5">{error}</p>
           </div>
-          <Button variant="ghost" size="sm" onClick={loadAll} className="ml-auto">Retry</Button>
+          <Button variant="ghost" size="sm" onClick={() => { loadAll(true) }} className="ml-auto">Retry</Button>
         </div>
       )}
 
@@ -345,7 +345,7 @@ export function LeadsPanel() {
           {smartBatches.map(batch => (
             <Card key={batch.emailId}>
               <div className="p-4">
-                <SmartMailReview batch={batch} onDone={loadAll} />
+                <SmartMailReview batch={batch} onDone={() => { loadAll(true) }} />
               </div>
             </Card>
           ))}
