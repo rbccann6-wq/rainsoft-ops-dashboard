@@ -169,7 +169,7 @@ async function ocrPage(imagePath) {
         role: 'user',
         content: [
           { type: 'image', source: { type: 'base64', media_type: 'image/png', data: imgData } },
-          { type: 'text', text: 'Extract all data from this water test lead card. Return ONLY valid JSON with these exact fields: full_name (handwritten name), address (handwritten street address only), city (string), state (2-letter code), zip (string), phone (string), email (string), water_source ("City" or "Well"), buys_bottled_water ("Yes" or "No"), water_conditions (array from: Chlorine Smell, Brown Stains, Scale Deposits, Rotten Smell, Cloudiness), water_quality ("Good" or "Fair" or "Poor"), filtration (array from: Refrigerator, Whole Home, Sink, None), tds (number or null), hd (number or null), ph (number or null), printed_name (the PRINTED/TYPED name from the mailing label at top), printed_address (the PRINTED/TYPED street address from mailing label). If a field is blank or unclear use null. Return ONLY the JSON object, no explanation.' }
+          { type: 'text', text: 'Extract all data from this water test lead card. Return ONLY valid JSON with these exact fields: full_name (handwritten name), address (handwritten street address only), city (string), state (2-letter code), zip (string), phone (string), email (string), water_source ("City" or "Well"), buys_bottled_water ("Yes" or "No"), homeowner ("Yes" or "No" or null if not on card), water_conditions (array from: Chlorine Smell, Brown Stains, Scale Deposits, Rotten Smell, Cloudiness), water_quality ("Good" or "Fair" or "Poor"), filtration (array from: Refrigerator, Whole Home, Sink, None), tds (number from lab section or null), hd (number from lab section or null), ph (number from lab section or null), sample_date (date water sample was taken, as string, or null), printed_name (the PRINTED/TYPED name from the mailing label), printed_address (the PRINTED/TYPED street address from mailing label). If a field is blank or unclear use null. Return ONLY the JSON object, no explanation.' }
         ]
       }]
     })
@@ -294,6 +294,10 @@ router.post('/smartmail/process-batch', async (req, res) => {
         confidence: conf,
         printed_name: lead.printed_name || null,
         printed_address: lead.printed_address || null,
+        homeowner: lead.homeowner || null,
+        sample_date: lead.sample_date || null,
+        // Flag non-homeowners in status so dashboard shows it
+        status: lead.homeowner === 'No' ? 'no_homeowner' : 'pending',
         status: 'pending',
         ocr_raw: raw,
       }
@@ -394,30 +398,43 @@ router.post('/smartmail/push-to-sf/:batchId', async (req, res) => {
         return p
       }
 
-      const notes = [
-        `SmartMail Bottle Drop | Batch: ${lead.batch_subject}`,
-        lead.tds != null ? `TDS=${lead.tds}` : null,
-        lead.hd  != null ? `HD=${lead.hd}`   : null,
-        lead.ph  != null ? `PH=${lead.ph}`   : null,
-        lead.water_source   ? `Source: ${lead.water_source}` : null,
-        lead.water_quality  ? `Quality: ${lead.water_quality}` : null,
-        lead.water_conditions ? `Conditions: ${lead.water_conditions}` : null,
-      ].filter(Boolean).join(' | ')
+      const notes = `SmartMail Bottle Drop | Batch: ${lead.batch_subject}`
 
       const record = {
         RecordTypeId: BOTTLE_DROP_RT,
         FirstName: firstName, LastName: lastName,
         LeadSource: 'BD',
+        Lead_Source_Specific__c: 'SmartMail',
+        Gift__c: 'No Gift',
         Phone: fmt(lead.phone),
         Email: lead.email || '',
         Status: 'New',
         Important_Details_Notes__c: notes,
         CountryCode: 'US',
       }
-      if (lead.address)   record.Street     = lead.address
-      if (lead.city)      record.City        = lead.city
-      if (lead.state)     record.StateCode   = lead.state
-      if (lead.zip)       record.PostalCode  = lead.zip
+
+      // Address
+      if (lead.address)   record.Street      = lead.address
+      if (lead.city)      record.City         = lead.city
+      if (lead.state)     record.StateCode    = lead.state
+      if (lead.zip)       record.PostalCode   = lead.zip
+
+      // Homeowner: only set Yes, never set No in SF
+      if (lead.homeowner === 'Yes' || lead.homeowner === 'yes') {
+        record.Homeowner__c = 'Yes'
+      }
+      // (if No, we flag in ops dashboard only — see status field)
+
+      // Water data
+      if (lead.water_source)     record.Water_Source__c      = lead.water_source
+      if (lead.buys_bottled_water) record.Bottled_Water__c   = lead.buys_bottled_water
+      if (lead.water_quality)    record.Rate_your_water__c   = lead.water_quality
+      if (lead.water_conditions) record.Water_Conditions__c  = lead.water_conditions
+      if (lead.filtration)       record.Water_Filters__c     = lead.filtration
+      if (lead.hd  != null)      record.Hardness_Level__c    = lead.hd
+      // TDS: add 100 to card value (per business rule)
+      if (lead.tds != null)      record.TDS_Level__c         = lead.tds + 100
+      if (lead.sample_date)      record.Bottle_Drop_Sample_Date__c = lead.sample_date
 
       const r = await fetch(`${SF_INSTANCE}/services/data/v59.0/sobjects/Lead`, {
         method: 'POST',

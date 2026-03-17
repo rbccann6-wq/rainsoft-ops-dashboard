@@ -25,6 +25,8 @@ interface SmartMailLead {
   water_conditions: string | null
   water_quality: string | null
   filtration: string | null
+  homeowner: string | null
+  sample_date: string | null
   tds: number | null
   hd: number | null
   ph: number | null
@@ -211,11 +213,23 @@ export function SmartMailReview({ batch, onDone }: { batch: SmartMailBatch; onDo
                     )}
                   </div>
 
+                  {/* Homeowner badge */}
+                  {lead.homeowner && (
+                    <span className={cn('text-xs px-2 py-0.5 rounded-full border font-medium',
+                      lead.homeowner === 'Yes'
+                        ? 'bg-emerald-950/40 text-emerald-400 border-emerald-800/50'
+                        : 'bg-amber-950/40 text-amber-400 border-amber-800/50'
+                    )}>
+                      {lead.homeowner === 'Yes' ? '🏠 Homeowner' : '⚠️ Not Homeowner'}
+                    </span>
+                  )}
+
                   {/* Water stats */}
                   <div className="flex flex-wrap gap-2">
                     {lead.tds != null && (
-                      <span className="flex items-center gap-1 text-xs bg-blue-950/40 text-blue-300 border border-blue-800/40 px-2 py-0.5 rounded-full">
-                        <Droplets className="w-3 h-3" />TDS {lead.tds}
+                      <span className="flex items-center gap-1 text-xs bg-blue-950/40 text-blue-300 border border-blue-800/40 px-2 py-0.5 rounded-full"
+                        title={`Card value: ${lead.tds} → SF value: ${lead.tds + 100} (+100 per business rule)`}>
+                        <Droplets className="w-3 h-3" />TDS {lead.tds} → {lead.tds + 100}
                       </span>
                     )}
                     {lead.hd != null && <span className="text-xs bg-slate-800 text-slate-300 border border-slate-700 px-2 py-0.5 rounded-full">HD {lead.hd}</span>}
@@ -255,6 +269,14 @@ export function SmartMailReview({ batch, onDone }: { batch: SmartMailBatch; onDo
                   )}
 
                   {/* Actions */}
+                  {/* Non-homeowner flag */}
+                  {lead.status === 'no_homeowner' && (
+                    <div className="flex items-center gap-2 bg-amber-950/30 border border-amber-700/40 rounded-lg px-3 py-2">
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+                      <p className="text-xs text-amber-300 font-medium">Not a homeowner — not eligible for Salesforce push</p>
+                    </div>
+                  )}
+
                   {lead.status === 'pending' && (
                     <div className="flex gap-2 pt-1">
                       <Button variant="success" size="sm" onClick={() => updateStatus(lead.id, 'approve')}>
