@@ -222,12 +222,103 @@ router.get('/leads', async (req, res) => {
       .filter(r => r.status === 'rejected')
       .map(r => r.reason?.message)
 
+    // Auto-sync new leads to Salesforce (fire and forget — don't block response)
+    syncLeadsToSalesforce(successful).catch(err =>
+      console.error('[SF sync] Failed:', err.message)
+    )
+
     res.json({ leads: successful, errors: failed })
   } catch (err) {
     console.error('GET /api/leads:', err.message)
     res.status(500).json({ error: err.message })
   }
 })
+
+// ─── Salesforce auto-sync ─────────────────────────────────────────────────────
+
+const SF_INSTANCE = 'https://rainsoftse.my.salesforce.com'
+const NON_CUSTOMER_RT = '0121Q000001A2BOQA0'
+let sfToken = null
+let sfTokenExpiry = 0
+
+async function getSfToken() {
+  if (sfToken && Date.now() < sfTokenExpiry) return sfToken
+  const soap = `<?xml version="1.0" encoding="utf-8"?><env:Envelope xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:env="http://schemas.xmlsoap.org/soap/envelope/"><env:Body><n1:login xmlns:n1="urn:partner.soap.sforce.com"><n1:username>rebecca@rainsoftse.com</n1:username><n1:password>06RAPPAR.!</n1:password></n1:login></env:Body></env:Envelope>`
+  const r = await fetch('https://login.salesforce.com/services/Soap/u/59.0', {
+    method: 'POST', headers: { 'Content-Type': 'text/xml; charset=UTF-8', SOAPAction: 'login' }, body: soap
+  })
+  const text = await r.text()
+  const match = text.match(/<sessionId>([^<]+)<\/sessionId>/)
+  if (!match) throw new Error('SF login failed')
+  sfToken = match[1]
+  sfTokenExpiry = Date.now() + 55 * 60 * 1000 // 55 min
+  return sfToken
+}
+
+async function sfQuery(soql) {
+  const token = await getSfToken()
+  const r = await fetch(`${SF_INSTANCE}/services/data/v59.0/query?q=${encodeURIComponent(soql)}`, {
+    headers: { Authorization: `Bearer ${token}` }
+  })
+  if (!r.ok) throw new Error(`SF query ${r.status}`)
+  return r.json()
+}
+
+async function sfCreate(obj, data) {
+  const token = await getSfToken()
+  const r = await fetch(`${SF_INSTANCE}/services/data/v59.0/sobjects/${obj}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  })
+  return r.json()
+}
+
+async function syncLeadsToSalesforce(leads) {
+  let created = 0
+  for (const lead of leads) {
+    if (!lead.woId) continue
+    try {
+      // Check if already synced
+      const existing = await sfQuery(
+        `SELECT Id FROM Account WHERE Important_Notes_Details__c LIKE '%WO#${lead.woId}%' LIMIT 1`
+      )
+      if (existing.totalSize > 0) continue
+
+      const nameParts = (lead.customerName || '').trim().split(' ')
+      const firstName = nameParts[0] || ''
+      const lastName = nameParts.slice(1).join(' ') || firstName
+
+      const record = {
+        RecordTypeId: NON_CUSTOMER_RT,
+        FirstName: firstName,
+        LastName: lastName,
+        AccountSource: 'Lowes',
+        PersonLeadSource: 'Lowes',
+        Gift__c: 'Other',
+        Phone: (lead.phone || '').replace(/\D/g, ''),
+        PersonEmail: lead.email || '',
+        Important_Notes_Details__c: `Direct Lowe's Lead | WO#${lead.woId} | Store: ${lead.store || ''}`,
+        Lead_Status__c: 'NEW LEAD',
+      }
+      if (lead.address) {
+        record.BillingStreet = lead.address
+        record.PersonMailingStreet = lead.address
+      }
+
+      const result = await sfCreate('Account', record)
+      if (result.success) {
+        console.log(`[SF sync] Created: ${lead.customerName} WO#${lead.woId} → ${result.id}`)
+        created++
+      } else {
+        console.warn(`[SF sync] Failed ${lead.woId}:`, JSON.stringify(result).slice(0, 150))
+      }
+    } catch (err) {
+      console.error(`[SF sync] Error for WO#${lead.woId}:`, err.message)
+    }
+  }
+  if (created > 0) console.log(`[SF sync] Synced ${created} new Lowe's leads to Salesforce`)
+}
 
 // ─── GET /api/smartmail-leads — SmartMail scanned card leads ─────────────────
 
