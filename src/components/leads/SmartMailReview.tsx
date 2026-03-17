@@ -30,6 +30,15 @@ interface SmartMailLead {
   house_value: number | null
   house_value_low: number | null
   house_value_high: number | null
+  property_owner: string | null
+  owner_occupied: boolean | null
+  tax_assessed: number | null
+  last_sale_date: string | null
+  last_sale_price: number | null
+  sqft: number | null
+  beds: number | null
+  baths: number | null
+  year_built: number | null
   tds: number | null
   hd: number | null
   ph: number | null
@@ -216,15 +225,50 @@ export function SmartMailReview({ batch, onDone }: { batch: SmartMailBatch; onDo
                     )}
                   </div>
 
-                  {/* House value */}
-                  {lead.house_value && (
-                    <div className="flex items-center gap-2 bg-slate-800/60 border border-slate-700 rounded-lg px-3 py-2">
-                      <span className="text-xs text-slate-400">Est. Home Value:</span>
-                      <span className="text-sm font-semibold text-white">${lead.house_value.toLocaleString()}</span>
-                      {lead.house_value_low && lead.house_value_high && (
-                        <span className="text-xs text-slate-500">
-                          (${lead.house_value_low.toLocaleString()} – ${lead.house_value_high.toLocaleString()})
-                        </span>
+                  {/* Property data from Rentcast */}
+                  {(lead.property_owner || lead.house_value || lead.tax_assessed) && (
+                    <div className="bg-slate-800/60 border border-slate-700 rounded-lg px-3 py-2.5 space-y-1.5">
+                      {lead.property_owner && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-400 w-24 flex-shrink-0">Record Owner:</span>
+                          <span className="text-xs font-medium text-white">{lead.property_owner}</span>
+                          {lead.owner_occupied !== null && (
+                            <span className={cn('text-xs px-1.5 py-0.5 rounded border',
+                              lead.owner_occupied ? 'text-emerald-400 border-emerald-800/50 bg-emerald-950/30' : 'text-amber-400 border-amber-800/50 bg-amber-950/30'
+                            )}>
+                              {lead.owner_occupied ? 'Owner-Occupied' : 'Not Owner-Occupied'}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {lead.house_value && (
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs text-slate-400 w-24 flex-shrink-0">Est. Value:</span>
+                          <span className="text-sm font-semibold text-white">${lead.house_value.toLocaleString()}</span>
+                          {lead.house_value_low && lead.house_value_high && (
+                            <span className="text-xs text-slate-500">(${lead.house_value_low.toLocaleString()} – ${lead.house_value_high.toLocaleString()})</span>
+                          )}
+                        </div>
+                      )}
+                      {lead.tax_assessed && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-400 w-24 flex-shrink-0">Tax Assessed:</span>
+                          <span className="text-xs text-slate-300">${lead.tax_assessed.toLocaleString()}</span>
+                        </div>
+                      )}
+                      {lead.last_sale_price && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-400 w-24 flex-shrink-0">Last Sale:</span>
+                          <span className="text-xs text-slate-300">${lead.last_sale_price.toLocaleString()} {lead.last_sale_date ? `(${lead.last_sale_date.slice(0,10)})` : ''}</span>
+                        </div>
+                      )}
+                      {(lead.sqft || lead.beds || lead.year_built) && (
+                        <div className="flex items-center gap-3 text-xs text-slate-500">
+                          {lead.beds && <span>{lead.beds} bed</span>}
+                          {lead.baths && <span>{lead.baths} bath</span>}
+                          {lead.sqft && <span>{lead.sqft.toLocaleString()} sqft</span>}
+                          {lead.year_built && <span>Built {lead.year_built}</span>}
+                        </div>
                       )}
                     </div>
                   )}

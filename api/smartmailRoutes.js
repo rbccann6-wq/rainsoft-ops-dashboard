@@ -56,18 +56,50 @@ async function getSfToken() {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-async function getRentcastValue(address, city, state, zip) {
+async function getRentcastData(address, city, state, zip) {
   if (!address || !city || !state) return null
+  const fullAddr = [address, city, state, zip].filter(Boolean).join(', ')
+  const result = { price: null, low: null, high: null, owner: null, ownerOccupied: null, taxAssessed: null, lastSaleDate: null, lastSalePrice: null, sqft: null, beds: null, baths: null, yearBuilt: null }
+
   try {
-    const fullAddr = [address, city, state, zip].filter(Boolean).join(', ')
-    const url = `https://api.rentcast.io/v1/avm/value?` + new URLSearchParams({
-      address: fullAddr, propertyType: 'Single Family'
+    // 1. Property record (owner, tax, sale history)
+    const r1 = await fetch(`https://api.rentcast.io/v1/properties?` + new URLSearchParams({ address: fullAddr }), {
+      headers: { 'X-Api-Key': RENTCAST_KEY, Accept: 'application/json' }
     })
-    const r = await fetch(url, { headers: { 'X-Api-Key': RENTCAST_KEY, Accept: 'application/json' } })
-    if (!r.ok) return null
-    const d = await r.json()
-    return { price: d.price, low: d.priceRangeLow, high: d.priceRangeHigh }
-  } catch { return null }
+    if (r1.ok) {
+      const d1 = await r1.json()
+      const prop = Array.isArray(d1) ? d1[0] : null
+      if (prop) {
+        result.owner = prop.owner?.names?.join(', ') || null
+        result.ownerOccupied = prop.ownerOccupied ?? null
+        result.sqft = prop.squareFootage || null
+        result.beds = prop.bedrooms || null
+        result.baths = prop.bathrooms || null
+        result.yearBuilt = prop.yearBuilt || null
+        result.lastSaleDate = prop.lastSaleDate?.slice(0,10) || null
+        result.lastSalePrice = prop.lastSalePrice || null
+        // Latest tax assessment
+        const tax = prop.taxAssessments || {}
+        const latestYear = Object.keys(tax).sort().pop()
+        if (latestYear) result.taxAssessed = tax[latestYear]?.value || null
+      }
+    }
+  } catch {}
+
+  try {
+    // 2. AVM estimated value
+    const r2 = await fetch(`https://api.rentcast.io/v1/avm/value?` + new URLSearchParams({ address: fullAddr, propertyType: 'Single Family' }), {
+      headers: { 'X-Api-Key': RENTCAST_KEY, Accept: 'application/json' }
+    })
+    if (r2.ok) {
+      const d2 = await r2.json()
+      result.price = d2.price || null
+      result.low = d2.priceRangeLow || null
+      result.high = d2.priceRangeHigh || null
+    }
+  } catch {}
+
+  return result
 }
 
 async function withRetry(fn, max = 3) {
@@ -280,8 +312,8 @@ router.post('/smartmail/process-batch', async (req, res) => {
       const v = await verify(lead, lead.printed_name, lead.printed_address)
       const conf = v.confidence
 
-      // Rentcast property value lookup
-      const rentcast = await getRentcastValue(lead.address, lead.city, lead.state, lead.zip)
+      // Rentcast: property record + estimated value
+      const rentcast = await getRentcastData(lead.address, lead.city, lead.state, lead.zip)
 
       const row = {
         batch_id: emailId,
@@ -316,6 +348,15 @@ router.post('/smartmail/process-batch', async (req, res) => {
         house_value: rentcast?.price || null,
         house_value_low: rentcast?.low || null,
         house_value_high: rentcast?.high || null,
+        property_owner: rentcast?.owner || null,
+        owner_occupied: rentcast?.ownerOccupied ?? null,
+        tax_assessed: rentcast?.taxAssessed || null,
+        last_sale_date: rentcast?.lastSaleDate || null,
+        last_sale_price: rentcast?.lastSalePrice || null,
+        sqft: rentcast?.sqft || null,
+        beds: rentcast?.beds || null,
+        baths: rentcast?.baths || null,
+        year_built: rentcast?.yearBuilt || null,
         // Flag non-homeowners in status so dashboard shows it
         status: lead.homeowner === 'No' ? 'no_homeowner' : 'pending',
         status: 'pending',
