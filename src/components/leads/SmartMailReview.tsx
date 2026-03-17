@@ -28,6 +28,8 @@ interface SmartMailLead {
   tds: number | null
   hd: number | null
   ph: number | null
+  name_match: boolean | null
+  addr_match: boolean | null
   phone_valid: boolean | null
   email_valid: boolean | null
   area_code_match: boolean | null
@@ -238,15 +240,17 @@ export function SmartMailReview({ batch, onDone }: { batch: SmartMailBatch; onDo
 
                   {/* Verification */}
                   <div className="flex flex-wrap gap-3">
-                    <VerBadge ok={lead.phone_valid} label="Phone" />
-                    <VerBadge ok={lead.email_valid} label="Email" />
+                    <VerBadge ok={lead.name_match ?? null} label="Name vs label" />
+                    <VerBadge ok={lead.addr_match ?? null} label="Addr vs label" />
+                    <VerBadge ok={lead.phone_valid} label="Phone fmt" />
                     <VerBadge ok={lead.area_code_match} label="Area code" />
+                    <VerBadge ok={lead.email_valid} label="Email DNS" />
                   </div>
 
-                  {/* Brave snippet */}
+                  {/* Verification score */}
                   {lead.brave_snippet && (
-                    <p className="text-xs text-slate-600 italic border-l-2 border-slate-700 pl-2">
-                      Web: {lead.brave_snippet}
+                    <p className="text-xs text-slate-500 border-l-2 border-slate-700 pl-2">
+                      Verification score: <span className="text-white font-medium">{lead.brave_snippet}</span>
                     </p>
                   )}
 

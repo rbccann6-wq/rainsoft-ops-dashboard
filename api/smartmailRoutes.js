@@ -64,36 +64,71 @@ async function withRetry(fn, max = 3) {
   throw err
 }
 
-async function braveSearch(query) {
+import { createRequire as _cr } from 'module'
+import dns from 'dns'
+import { promisify } from 'util'
+const dnsLookup = promisify(dns.lookup)
+
+const AL_AC = new Set(['205','251','256','334','938'])
+const FL_AC = new Set(['239','305','321','352','386','407','448','561','689','727','754','772','786','813','850','863','904','941','954'])
+const STATE_AC = { AL: AL_AC, FL: FL_AC }
+
+/** Cross-check handwritten name vs printed mailing label (ignoring middle initial) */
+function checkNameMatch(handwritten, printed) {
+  if (!handwritten || !printed) return null
+  const hw = handwritten.toLowerCase().trim().split(/\s+/)
+  const pr = printed.toLowerCase().trim().split(/\s+/)
+  return hw[0] === pr[0] && hw[hw.length-1] === pr[pr.length-1]
+}
+
+/** Cross-check handwritten address vs printed label (street number must match) */
+function checkAddrMatch(handwritten, printed) {
+  if (!handwritten || !printed) return null
+  const hwNum = handwritten.trim().match(/^(\d+)/)
+  const prNum = printed.trim().match(/^(\d+)/)
+  return hwNum && prNum ? hwNum[1] === prNum[1] : null
+}
+
+/** Validate phone format + area code matches state */
+function checkPhone(phone, state) {
+  if (!phone) return { phone_valid: null, area_code_match: null }
+  const digits = phone.replace(/\D/g, '')
+  const phone_valid = digits.length === 10
+  const ac = digits.slice(0, 3)
+  const codes = STATE_AC[state?.toUpperCase()]
+  const area_code_match = codes ? codes.has(ac) : null
+  return { phone_valid, area_code_match }
+}
+
+/** DNS lookup to confirm email domain exists and can receive mail */
+async function checkEmailDomain(email) {
+  if (!email) return null
+  const domain = email.split('@')[1]?.toLowerCase()
+  if (!domain) return false
   try {
-    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=2`
-    const r = await fetch(url, { headers: { 'Accept': 'application/json', 'X-Subscription-Token': BRAVE_KEY } })
-    const d = await r.json()
-    return d.web?.results?.[0]?.description?.slice(0, 150) || null
-  } catch { return null }
+    await dnsLookup(domain)
+    return true
+  } catch {
+    return false
+  }
 }
 
-function verify(lead) {
-  const AL = new Set(['205','251','256','334','938'])
-  const FL = new Set(['239','305','321','352','386','407','448','561','689','727','754','772','786','813','850','863','904','941','954'])
-  const STATE_AC = { AL, FL }
+async function verify(lead, printedName, printedAddr) {
+  const name_match = checkNameMatch(lead.full_name, printedName)
+  const addr_match = checkAddrMatch(lead.address, printedAddr)
+  const { phone_valid, area_code_match } = checkPhone(lead.phone, lead.state)
+  const email_valid = await checkEmailDomain(lead.email)
 
-  const phone_valid = lead.phone ? /^\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{4}$/.test(lead.phone.trim()) : false
-  const email_valid = lead.email ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(lead.email.trim()) : false
-  const digits = (lead.phone || '').replace(/\D/g, '')
-  const ac = digits.slice(-10, -7)
-  const stateAcs = STATE_AC[lead.state?.toUpperCase()]
-  const area_code_match = stateAcs ? stateAcs.has(ac) : null
-  return { phone_valid, email_valid, area_code_match }
-}
+  const checks = [name_match, addr_match, phone_valid, area_code_match, email_valid].filter(v => v !== null)
+  const passed = checks.filter(Boolean).length
+  const total  = checks.length
 
-function confidence(v, braveSnippet) {
-  let score = 0
-  if (v.phone_valid) score++
-  if (v.email_valid) score++
-  if (v.area_code_match !== false) score++
-  if (braveSnippet) score++
-  return score >= 3 ? 'High' : score >= 2 ? 'Medium' : score === 1 ? 'Low' : 'Flag'
+  let confidence = 'Flag'
+  if (passed === total && total >= 3) confidence = 'High'
+  else if (passed >= 3) confidence = 'Medium'
+  else if (passed >= 2) confidence = 'Low'
+
+  return { name_match, addr_match, phone_valid, area_code_match, email_valid, confidence, score: `${passed}/${total}` }
 }
 
 // ── PDF → images using Python ─────────────────────────────────────────────────
@@ -134,7 +169,7 @@ async function ocrPage(imagePath) {
         role: 'user',
         content: [
           { type: 'image', source: { type: 'base64', media_type: 'image/png', data: imgData } },
-          { type: 'text', text: 'Extract all data from this water test lead card. Return ONLY valid JSON with these exact fields: full_name (string), address (string, street only), city (string), state (2-letter code), zip (string), phone (string with formatting like 334-555-1234), email (string), water_source ("City" or "Well"), buys_bottled_water ("Yes" or "No"), water_conditions (array of strings from: Chlorine Smell, Brown Stains, Scale Deposits, Rotten Smell, Cloudiness), water_quality ("Good" or "Fair" or "Poor"), filtration (array from: Refrigerator, Whole Home, Sink, None), tds (number or null), hd (number or null), ph (number or null). If a field is blank or unclear use null. Return ONLY the JSON object, no explanation.' }
+          { type: 'text', text: 'Extract all data from this water test lead card. Return ONLY valid JSON with these exact fields: full_name (handwritten name), address (handwritten street address only), city (string), state (2-letter code), zip (string), phone (string), email (string), water_source ("City" or "Well"), buys_bottled_water ("Yes" or "No"), water_conditions (array from: Chlorine Smell, Brown Stains, Scale Deposits, Rotten Smell, Cloudiness), water_quality ("Good" or "Fair" or "Poor"), filtration (array from: Refrigerator, Whole Home, Sink, None), tds (number or null), hd (number or null), ph (number or null), printed_name (the PRINTED/TYPED name from the mailing label at top), printed_address (the PRINTED/TYPED street address from mailing label). If a field is blank or unclear use null. Return ONLY the JSON object, no explanation.' }
         ]
       }]
     })
@@ -227,10 +262,9 @@ router.post('/smartmail/process-batch', async (req, res) => {
 
       if (!lead?.full_name) continue  // skip blank/envelope pages
 
-      // Verify
-      const v = verify(lead)
-      const braveSnippet = await braveSearch(`"${lead.full_name}" ${lead.city || ''} ${lead.state || ''}`)
-      const conf = confidence(v, braveSnippet)
+      // Verify: card cross-check + area code + email DNS
+      const v = await verify(lead, lead.printed_name, lead.printed_address)
+      const conf = v.confidence
 
       const row = {
         batch_id: emailId,
@@ -251,11 +285,15 @@ router.post('/smartmail/process-batch', async (req, res) => {
         tds: lead.tds,
         hd: lead.hd,
         ph: lead.ph,
+        name_match: v.name_match,
+        addr_match: v.addr_match,
         phone_valid: v.phone_valid,
         email_valid: v.email_valid,
         area_code_match: v.area_code_match,
-        brave_snippet: braveSnippet,
+        brave_snippet: v.score,
         confidence: conf,
+        printed_name: lead.printed_name || null,
+        printed_address: lead.printed_address || null,
         status: 'pending',
         ocr_raw: raw,
       }
