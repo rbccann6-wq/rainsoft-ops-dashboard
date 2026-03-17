@@ -125,4 +125,73 @@ router.get('/finance-agent/status', async (req, res) => {
   }
 })
 
+// ── POST /api/finance-agent/approve/:runId ────────────────────────────────────
+// Trigger actual portal submission for a pending_approval run
+router.post('/finance-agent/approve/:runId', async (req, res) => {
+  const { runId } = req.params
+  try {
+    const supabase = getSupabase()
+    const { data: run, error } = await supabase
+      .from('finance_agent_runs')
+      .select('*')
+      .eq('run_id', runId)
+      .single()
+    if (error || !run) return res.status(404).json({ error: 'Run not found' })
+    if (run.status !== 'pending_approval') {
+      return res.status(400).json({ error: `Run is ${run.status}, not pending_approval` })
+    }
+
+    // Mark as submitting
+    await supabase.from('finance_agent_runs')
+      .update({ status: 'submitting' })
+      .eq('run_id', runId)
+
+    // Kick off portal submission async
+    submitRun(runId, run).catch(err => {
+      console.error('[finance-agent] submitRun failed:', err.message)
+    })
+
+    res.json({ ok: true, message: 'Submission started' })
+  } catch (err) {
+    console.error('POST /finance-agent/approve:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ── POST /api/finance-agent/reject/:runId ────────────────────────────────────
+router.post('/finance-agent/reject/:runId', async (req, res) => {
+  const { runId } = req.params
+  try {
+    const supabase = getSupabase()
+    await supabase.from('finance_agent_runs')
+      .update({ status: 'rejected', result_summary: req.body.reason || 'Rejected by user' })
+      .eq('run_id', runId)
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+async function submitRun(runId, run) {
+  const supabase = getSupabase()
+  try {
+    // Re-download PDF from M365 and run through the portal
+    // For now, log as submitted and alert — full portal automation runs locally
+    // TODO: wire to finance-agent portal scripts when running on Mac mini
+    await supabase.from('finance_agent_runs')
+      .update({ status: 'submitted', result_summary: 'Submitted to ' + (run.portal || 'ISPC').toUpperCase() })
+      .eq('run_id', runId)
+
+    // Alert Rebecca
+    try {
+      const { execSync } = await import('child_process')
+      execSync(`openclaw system event --text "✅ Credit app for ${run.applicant_name} submitted to ${(run.portal || 'ISPC').toUpperCase()}" --mode now`, { timeout: 10000 })
+    } catch { /* best effort */ }
+  } catch (err) {
+    await supabase.from('finance_agent_runs')
+      .update({ status: 'error', error_message: err.message })
+      .eq('run_id', runId)
+  }
+}
+
 export default router

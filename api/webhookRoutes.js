@@ -321,45 +321,64 @@ async function processNotification(messageId) {
     }
 
     const app = parsePdf(pdfPath)
-    console.log(`[webhook] Parsed app: ${app.firstName} ${app.lastName} | $${app.saleAmount} | ${app.leadSource}`)
-
-    const result = await runAgent(app)
     const name = `${app.firstName} ${app.lastName}`
     const amount = `$${app.saleAmount.toLocaleString()}`
+    console.log(`[webhook] Parsed app: ${name} | ${amount} | ${app.leadSource}`)
 
-    if (!result.ok && result.stops?.length > 0) {
-      alert(`🛑 CREDIT APP STOP — ${name} (${amount}): ${result.stops.join(' | ')}. Review required before submitting.`)
-    } else if (result.skipped) {
-      alert(`📋 Credit app received for ${name} (${amount}) — ${result.skipReason}`)
-    } else if (result.ok) {
-      alert(`✅ Credit app submitted for ${name} (${amount}) via ${result.portal?.toUpperCase()}. Check portal for decision.`)
-    } else {
-      alert(`⚠️ Credit app for ${name} (${amount}) — unexpected result. Check finance-agent logs.`)
+    // ── APPROVAL MODE: validate + route, but DO NOT submit yet ──────────────
+    // Run validator to catch hard stops
+    const { validate } = await import(`${process.env.FINANCE_AGENT_PATH || '/Users/rebeccasbot/Projects/finance-agent'}/src/validator.js`)
+    const { route }    = await import(`${process.env.FINANCE_AGENT_PATH || '/Users/rebeccasbot/Projects/finance-agent'}/src/router.js`)
+
+    const validation = validate(app)
+    const routing    = route(app)
+
+    const runId = `${messageId}-${Date.now()}`
+
+    if (!validation.ok) {
+      // Hard stop — alert Rebecca, log as stopped, wait for manual review
+      const stops = validation.stops.join(' | ')
+      alert(`🛑 CREDIT APP NEEDS REVIEW — ${name} (${amount})\n${stops}\n\nCheck Finance Agent tab to approve or reject.`)
+      await logRun({
+        run_id: runId, applicant_name: name,
+        co_applicant_name: app.coApp?.firstName ? `${app.coApp.firstName} ${app.coApp.lastName}` : null,
+        sale_amount: app.saleAmount, amount_financed: app.amountFinanced,
+        product: app.product, lead_source: app.leadSource, promo: app.promo,
+        portal: routing.portal, status: 'stopped', stops: validation.stops,
+        sales_rep: app.salesRep, install_date: app.installDate,
+        email_subject: msg.subject, email_received_at: msg.receivedDateTime,
+      })
+      return
     }
 
-    // Log to finance agent dashboard
+    if (routing.skip) {
+      // HD/Lowe's — customer self-submits, just notify
+      alert(`📋 Credit app received for ${name} (${amount}) — ${routing.skipReason}`)
+      await logRun({
+        run_id: runId, applicant_name: name,
+        co_applicant_name: app.coApp?.firstName ? `${app.coApp.firstName} ${app.coApp.lastName}` : null,
+        sale_amount: app.saleAmount, amount_financed: app.amountFinanced,
+        product: app.product, lead_source: app.leadSource, promo: app.promo,
+        portal: null, status: 'skipped', skip_reason: routing.skipReason,
+        sales_rep: app.salesRep, install_date: app.installDate,
+        email_subject: msg.subject, email_received_at: msg.receivedDateTime,
+      })
+      return
+    }
+
+    // ── PENDING APPROVAL — alert Rebecca to review + approve in dashboard ────
+    const portalName = (routing.portal || 'ISPC').toUpperCase()
+    alert(`📥 New credit app ready for review — ${name} (${amount})\nPortal: ${portalName} | Product: ${app.product || '?'}\n\nOpen the Finance Agent tab to approve and submit.`)
+
     await logRun({
-      run_id:            `${messageId}-${Date.now()}`,
-      applicant_name:    name,
+      run_id: runId, applicant_name: name,
       co_applicant_name: app.coApp?.firstName ? `${app.coApp.firstName} ${app.coApp.lastName}` : null,
-      sale_amount:       app.saleAmount,
-      amount_financed:   app.amountFinanced,
-      product:           app.product,
-      lead_source:       app.leadSource,
-      promo:             app.promo,
-      portal:            result.portal || null,
-      status:            !result.ok && result.stops?.length ? 'stopped'
-                         : result.skipped ? 'skipped'
-                         : result.ok ? (result.status || 'submitted')
-                         : 'error',
-      stops:             result.stops?.length ? result.stops : null,
-      skip_reason:       result.skipReason || null,
-      result_summary:    result.result || null,
-      sales_rep:         app.salesRep || null,
-      install_date:      app.installDate || null,
-      email_subject:     msg.subject || null,
-      email_received_at: msg.receivedDateTime || null,
-      error_message:     result.error || null,
+      sale_amount: app.saleAmount, amount_financed: app.amountFinanced,
+      product: app.product, lead_source: app.leadSource, promo: app.promo,
+      portal: routing.portal, status: 'pending_approval',
+      sales_rep: app.salesRep, install_date: app.installDate,
+      email_subject: msg.subject, email_received_at: msg.receivedDateTime,
+      result_summary: `Ready to submit to ${portalName} — awaiting your approval`,
     })
   } catch (err) {
     console.error(`[webhook] Agent run failed:`, err.message)

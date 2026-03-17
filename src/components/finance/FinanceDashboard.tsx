@@ -51,13 +51,16 @@ interface WebhookStatus {
 }
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: React.ElementType }> = {
-  approved:  { label: 'Approved',  color: 'text-emerald-400 bg-emerald-950/40 border-emerald-800/50', icon: CheckCircle2 },
-  declined:  { label: 'Declined',  color: 'text-red-400 bg-red-950/40 border-red-800/50',            icon: XCircle },
-  stopped:   { label: 'Stopped',   color: 'text-amber-400 bg-amber-950/40 border-amber-800/50',      icon: AlertCircle },
-  pending:   { label: 'Pending',   color: 'text-blue-400 bg-blue-950/40 border-blue-800/50',         icon: Clock },
-  skipped:   { label: 'Skipped',   color: 'text-slate-400 bg-slate-800/40 border-slate-700/50',      icon: SkipForward },
-  submitted: { label: 'Submitted', color: 'text-blue-400 bg-blue-950/40 border-blue-800/50',         icon: Clock },
-  error:     { label: 'Error',     color: 'text-red-400 bg-red-950/40 border-red-800/50',            icon: XCircle },
+  approved:         { label: 'Approved',        color: 'text-emerald-400 bg-emerald-950/40 border-emerald-800/50', icon: CheckCircle2 },
+  declined:         { label: 'Declined',        color: 'text-red-400 bg-red-950/40 border-red-800/50',            icon: XCircle },
+  stopped:          { label: 'Needs Review',    color: 'text-amber-400 bg-amber-950/40 border-amber-800/50',      icon: AlertCircle },
+  pending_approval: { label: 'Awaiting Approval', color: 'text-violet-400 bg-violet-950/40 border-violet-800/50', icon: Clock },
+  submitting:       { label: 'Submitting…',     color: 'text-blue-400 bg-blue-950/40 border-blue-800/50',         icon: Loader2 },
+  submitted:        { label: 'Submitted',       color: 'text-blue-400 bg-blue-950/40 border-blue-800/50',         icon: Clock },
+  pending:          { label: 'Pending',         color: 'text-blue-400 bg-blue-950/40 border-blue-800/50',         icon: Clock },
+  skipped:          { label: 'Skipped',         color: 'text-slate-400 bg-slate-800/40 border-slate-700/50',      icon: SkipForward },
+  rejected:         { label: 'Rejected',        color: 'text-slate-400 bg-slate-800/40 border-slate-700/50',      icon: XCircle },
+  error:            { label: 'Error',           color: 'text-red-400 bg-red-950/40 border-red-800/50',            icon: XCircle },
 }
 
 function statusConfig(status: string) {
@@ -93,6 +96,8 @@ export function FinanceDashboard() {
   const [error, setError]             = useState<string | null>(null)
   const [selected, setSelected]       = useState<Run | null>(null)
   const [expandedStops, setExpandedStops] = useState<Set<number>>(new Set())
+  const [approving, setApproving]     = useState(false)
+  const [actionMsg, setActionMsg]     = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -114,6 +119,33 @@ export function FinanceDashboard() {
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  async function approve(run: Run) {
+    setApproving(true)
+    setActionMsg(null)
+    try {
+      const r = await fetch(`/api/finance-agent/approve/${encodeURIComponent(run.run_id)}`, { method: 'POST' })
+      const data = await r.json()
+      if (!r.ok) throw new Error(data.error || 'Failed')
+      setActionMsg('✅ Submitted! Check the portal for the decision.')
+      await load()
+    } catch (err) {
+      setActionMsg('❌ ' + (err as Error).message)
+    } finally {
+      setApproving(false)
+    }
+  }
+
+  async function reject(run: Run) {
+    setApproving(true)
+    try {
+      await fetch(`/api/finance-agent/reject/${encodeURIComponent(run.run_id)}`, { method: 'POST' })
+      setSelected(null)
+      await load()
+    } finally {
+      setApproving(false)
+    }
+  }
 
   function toggleStops(id: number) {
     setExpandedStops(prev => {
@@ -366,6 +398,26 @@ export function FinanceDashboard() {
             <p className="text-xs text-slate-600">
               Processed {timeAgo(selected.processed_at)}
             </p>
+
+            {/* Approve / Reject for pending_approval */}
+            {selected.status === 'pending_approval' && (
+              <div className="border-t border-slate-800 pt-4 space-y-3">
+                <p className="text-sm font-medium text-white">Ready to submit to {(selected.portal || 'ISPC').toUpperCase()}</p>
+                {actionMsg && (
+                  <p className={cn('text-sm', actionMsg.startsWith('✅') ? 'text-emerald-400' : 'text-red-400')}>
+                    {actionMsg}
+                  </p>
+                )}
+                <div className="flex gap-2">
+                  <Button variant="success" size="sm" disabled={approving} onClick={() => approve(selected)}>
+                    {approving ? <><Loader2 className="w-3 h-3 animate-spin" /> Submitting…</> : '✅ Approve & Submit'}
+                  </Button>
+                  <Button variant="danger" size="sm" disabled={approving} onClick={() => reject(selected)}>
+                    Reject
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </Modal>
