@@ -72,6 +72,8 @@ export function EmailCleaner() {
   // Delete state
   const [deleteStates, setDeleteStates] = useState<Record<string, DeleteState>>({})
   const [deleteCounts, setDeleteCounts] = useState<Record<string, number>>({})
+  // Locally protected senders (user clicked "Keep" — persisted to safelist)
+  const [keptEmails, setKeptEmails] = useState<Set<string>>(new Set())
 
   // Filter/search
   const [search, setSearch] = useState('')
@@ -134,6 +136,19 @@ export function EmailCleaner() {
     }
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [scanStatus?.status, pollStatus])
+
+  const keepSender = useCallback(async (email: string) => {
+    // Optimistic UI
+    setKeptEmails(prev => new Set([...prev, email]))
+    // Add to permanent safelist so it never gets flagged again
+    try {
+      await apiFetch('/safelist/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ senderEmail: email }),
+      })
+    } catch { /* best effort — UI already updated */ }
+  }, [])
 
   const deleteSender = useCallback(async (email: string) => {
     setDeleteStates(s => ({ ...s, [email]: 'deleting' }))
@@ -365,28 +380,40 @@ export function EmailCleaner() {
                             )}
                           </div>
                         </div>
-                        <div className="flex-shrink-0">
-                          {sender.safe ? (
+                        <div className="flex-shrink-0 flex flex-col items-end gap-1.5">
+                          {sender.safe || keptEmails.has(sender.email) ? (
                             <span className="text-xs text-green-400/70 flex items-center gap-1">
-                              <ShieldCheck className="w-3 h-3" /> Protected
+                              <ShieldCheck className="w-3 h-3" />
+                              {keptEmails.has(sender.email) ? 'Kept — never delete' : 'Protected'}
                             </span>
                           ) : state === 'done' ? (
                             <span className="text-xs text-green-400 flex items-center gap-1">
                               <CheckCircle2 className="w-3 h-3" /> {deleted?.toLocaleString()} deleted
                             </span>
                           ) : (
-                            <Button variant="ghost" size="sm"
-                              disabled={state === 'deleting'}
-                              onClick={() => deleteSender(sender.email)}
-                              className="text-red-400 hover:text-red-300 border-red-900/50 hover:border-red-700"
-                            >
-                              {state === 'deleting'
-                                ? <><Loader2 className="w-3 h-3 animate-spin" /> Deleting…</>
-                                : state === 'error'
-                                ? 'Retry'
-                                : <><Trash2 className="w-3 h-3" /> Delete all {sender.count.toLocaleString()}</>
-                              }
-                            </Button>
+                            <div className="flex gap-1.5">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => keepSender(sender.email)}
+                                className="text-green-400 hover:text-green-300 border-green-900/50 hover:border-green-700"
+                                title="Mark as keep — never delete"
+                              >
+                                <ShieldCheck className="w-3 h-3" /> Keep
+                              </Button>
+                              <Button variant="ghost" size="sm"
+                                disabled={state === 'deleting'}
+                                onClick={() => deleteSender(sender.email)}
+                                className="text-red-400 hover:text-red-300 border-red-900/50 hover:border-red-700"
+                              >
+                                {state === 'deleting'
+                                  ? <><Loader2 className="w-3 h-3 animate-spin" /> Deleting…</>
+                                  : state === 'error'
+                                  ? 'Retry'
+                                  : <><Trash2 className="w-3 h-3" /> Delete all {sender.count.toLocaleString()}</>
+                                }
+                              </Button>
+                            </div>
                           )}
                         </div>
                       </div>
