@@ -129,6 +129,33 @@ INSERT INTO categories (name, group_name, type, sort_order) VALUES
   ('Taxes',                       'Financial', 'expense', 62)
 ON CONFLICT (name) DO NOTHING;
 
+-- ─── Batch Deposits ──────────────────────────────────────────────────────────
+-- ISPC often combines multiple deals into one bank deposit.
+-- This table links a single bank deposit to multiple deals.
+
+CREATE TABLE IF NOT EXISTS batch_deposits (
+  id                SERIAL PRIMARY KEY,
+  finance_company   TEXT NOT NULL,
+  deposit_date      DATE,
+  deposit_amount    NUMERIC(12,2) NOT NULL,   -- what actually hit the bank
+  expected_amount   NUMERIC(12,2),             -- sum of all deals in this batch
+  variance          NUMERIC(12,2),             -- deposit_amount - expected_amount
+  verified          BOOLEAN DEFAULT FALSE,
+  bank_reference    TEXT,                      -- bank transaction reference if available
+  notes             TEXT,
+  created_at        TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Links each deal to the batch deposit it was paid in
+CREATE TABLE IF NOT EXISTS batch_deposit_deals (
+  id                SERIAL PRIMARY KEY,
+  batch_deposit_id  INTEGER REFERENCES batch_deposits(id) ON DELETE CASCADE,
+  deal_id           INTEGER REFERENCES deals(id),
+  expected_amount   NUMERIC(12,2),
+  created_at        TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(batch_deposit_id, deal_id)
+);
+
 -- ─── Indexes ──────────────────────────────────────────────────────────────────
 
 CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
@@ -137,3 +164,6 @@ CREATE INDEX IF NOT EXISTS idx_transactions_deal_id ON transactions(deal_id);
 CREATE INDEX IF NOT EXISTS idx_deals_status ON deals(status);
 CREATE INDEX IF NOT EXISTS idx_deals_sale_date ON deals(sale_date);
 CREATE INDEX IF NOT EXISTS idx_deals_finance_company ON deals(finance_company);
+CREATE INDEX IF NOT EXISTS idx_batch_deposits_company ON batch_deposits(finance_company);
+CREATE INDEX IF NOT EXISTS idx_batch_deposits_date ON batch_deposits(deposit_date);
+CREATE INDEX IF NOT EXISTS idx_batch_deposit_deals_batch ON batch_deposit_deals(batch_deposit_id);
