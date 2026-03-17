@@ -21,9 +21,12 @@ const PRICING = {
   'claude-sonnet-4-6':      { input: 3.00,  output: 15.00, cacheRead: 0.30,  cacheWrite: 3.75 },
   'claude-haiku-4-5':       { input: 0.80,  output: 4.00,  cacheRead: 0.08,  cacheWrite: 1.00 },
   'claude-opus-4-5':        { input: 15.00, output: 75.00, cacheRead: 1.50,  cacheWrite: 18.75 },
-  // Gemini Flash (for Amp/Scout/Inbox)
+  // Gemini (for Amp/Scout/Inbox)
+  'gemini-2.5-flash':       { input: 0.15,  output: 0.60,  cacheRead: 0.037, cacheWrite: 0 },
   'gemini-2.0-flash':       { input: 0.10,  output: 0.40,  cacheRead: 0.025, cacheWrite: 0 },
+  'gemini-2.0-flash-lite':  { input: 0.075, output: 0.30,  cacheRead: 0.018, cacheWrite: 0 },
   'gemini-1.5-flash':       { input: 0.075, output: 0.30,  cacheRead: 0.018, cacheWrite: 0 },
+  'gemini-2.5-pro':         { input: 1.25,  output: 10.00, cacheRead: 0.31,  cacheWrite: 0 },
 }
 
 function getPricing(model) {
