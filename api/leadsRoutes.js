@@ -206,10 +206,14 @@ router.get('/leads', async (req, res) => {
     const leads = await Promise.allSettled(
       woEmails.slice(0, 10).map(async ({ email, woId }) => {
         const wo = await fetchWorkOrder(woId)
+        // Parse address for Rentcast
+        const addrParsed = parseAddress(wo.address)
+        const rentcast = await getRentcastData(addrParsed.street, addrParsed.city, addrParsed.state, addrParsed.zip).catch(() => null)
         return {
           ...wo,
           emailDate: email.receivedDateTime,
           emailId: email.id,
+          rentcast,
         }
       })
     )
@@ -244,6 +248,55 @@ router.get('/leads', async (req, res) => {
 
 const SF_INSTANCE = 'https://rainsoftse.my.salesforce.com'
 const LOWES_LEAD_RT = '012Rl000007imrJIAQ'
+const RENTCAST_KEY = process.env.RENTCAST_API_KEY || '85cb3067516d4fbbac2693c806367dc2'
+
+function parseAddress(raw) {
+  if (!raw) return {}
+  // Try "123 Main St City ST 12345" pattern
+  const m = raw.match(/^(.*?)\s+([A-Za-z\s]+)\s+([A-Z]{2})\s+(\d{5})$/)
+  if (m) return { street: m[1].trim(), city: m[2].trim(), state: m[3], zip: m[4] }
+  // Try without zip
+  const m2 = raw.match(/^(.*?)\s+([A-Za-z\s]+)\s+([A-Z]{2})$/)
+  if (m2) return { street: m2[1].trim(), city: m2[2].trim(), state: m2[3], zip: '' }
+  return { street: raw }
+}
+
+async function getRentcastData(address, city, state, zip) {
+  if (!address) return null
+  const fullAddr = [address, city, state, zip].filter(Boolean).join(', ')
+  const result = { price: null, low: null, high: null, owner: null, ownerOccupied: null, lastSaleDate: null, lastSalePrice: null, sqft: null, beds: null, baths: null, yearBuilt: null }
+  try {
+    const r1 = await fetch(`https://api.rentcast.io/v1/properties?address=${encodeURIComponent(fullAddr)}`, {
+      headers: { 'X-Api-Key': RENTCAST_KEY, Accept: 'application/json' }
+    })
+    if (r1.ok) {
+      const d1 = await r1.json()
+      const prop = Array.isArray(d1) ? d1[0] : null
+      if (prop) {
+        result.owner = prop.owner?.names?.join(', ') || null
+        result.ownerOccupied = prop.ownerOccupied ?? null
+        result.sqft = prop.squareFootage || null
+        result.beds = prop.bedrooms || null
+        result.baths = prop.bathrooms || null
+        result.yearBuilt = prop.yearBuilt || null
+        result.lastSaleDate = prop.lastSaleDate?.slice(0,10) || null
+        result.lastSalePrice = prop.lastSalePrice || null
+      }
+    }
+  } catch {}
+  try {
+    const r2 = await fetch(`https://api.rentcast.io/v1/avm/value?address=${encodeURIComponent(fullAddr)}&propertyType=Single+Family`, {
+      headers: { 'X-Api-Key': RENTCAST_KEY, Accept: 'application/json' }
+    })
+    if (r2.ok) {
+      const d2 = await r2.json()
+      result.price = d2.price || null
+      result.low = d2.priceRangeLow || null
+      result.high = d2.priceRangeHigh || null
+    }
+  } catch {}
+  return result
+}
 let sfToken = null
 let sfTokenExpiry = 0
 
@@ -321,7 +374,17 @@ async function syncLeadsToSalesforce(leads) {
         Phone: lead.phone || '',
         Email: lead.email || '',
         Status: 'New',
-        Important_Details_Notes__c: `Direct Lowe's Lead | WO#${lead.woId} | Store: ${lead.store || ''}`,
+        Important_Details_Notes__c: [
+          `Direct Lowe's Lead | WO#${lead.woId} | Store: ${lead.store || ''}`,
+          lead.rentcast?.owner        ? `Record Owner: ${lead.rentcast.owner}` : null,
+          lead.rentcast?.ownerOccupied != null ? `Owner-Occupied: ${lead.rentcast.ownerOccupied ? 'Yes' : 'No'}` : null,
+          lead.rentcast?.price        ? `Est. Value: $${Number(lead.rentcast.price).toLocaleString()}` : null,
+          lead.rentcast?.lastSalePrice ? `Last Sale: $${Number(lead.rentcast.lastSalePrice).toLocaleString()}${lead.rentcast.lastSaleDate ? ` (${lead.rentcast.lastSaleDate})` : ''}` : null,
+          lead.rentcast?.sqft         ? `${lead.rentcast.sqft.toLocaleString()} sqft` : null,
+          lead.rentcast?.beds         ? `${lead.rentcast.beds} bed` : null,
+          lead.rentcast?.baths        ? `${lead.rentcast.baths} bath` : null,
+          lead.rentcast?.yearBuilt    ? `Built ${lead.rentcast.yearBuilt}` : null,
+        ].filter(Boolean).join(' | '),
         CountryCode: 'US',
       }
 

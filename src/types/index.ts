@@ -111,6 +111,19 @@ export interface ImeLead {
   emailId: string
   contacted?: boolean
   sfLeadId?: string | null
+  rentcast?: {
+    price: number | null
+    low: number | null
+    high: number | null
+    owner: string | null
+    ownerOccupied: boolean | null
+    lastSaleDate: string | null
+    lastSalePrice: number | null
+    sqft: number | null
+    beds: number | null
+    baths: number | null
+    yearBuilt: number | null
+  } | null
 }
 
 export interface SmartMailBatch {

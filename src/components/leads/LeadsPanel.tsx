@@ -247,6 +247,46 @@ export function LeadsPanel() {
                     )}
                   </div>
 
+                  {/* Property data from Rentcast */}
+                  {lead.rentcast && (lead.rentcast.price || lead.rentcast.owner) && (
+                    <div className="bg-slate-800/60 border border-slate-700 rounded-lg px-3 py-2 space-y-1 text-xs">
+                      {lead.rentcast.owner && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-slate-400 w-20 flex-shrink-0">Owner:</span>
+                          <span className="text-white font-medium">{lead.rentcast.owner}</span>
+                          {lead.rentcast.ownerOccupied !== null && (
+                            <span className={lead.rentcast.ownerOccupied ? 'text-emerald-400' : 'text-amber-400'}>
+                              {lead.rentcast.ownerOccupied ? '· Owner-Occupied' : '· Not Owner-Occupied'}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {lead.rentcast.price && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-slate-400 w-20 flex-shrink-0">Est. Value:</span>
+                          <span className="text-white font-semibold">${lead.rentcast.price.toLocaleString()}</span>
+                          {lead.rentcast.low && lead.rentcast.high && (
+                            <span className="text-slate-500">(${lead.rentcast.low.toLocaleString()} – ${lead.rentcast.high.toLocaleString()})</span>
+                          )}
+                        </div>
+                      )}
+                      {lead.rentcast.lastSalePrice && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-slate-400 w-20 flex-shrink-0">Last Sale:</span>
+                          <span className="text-slate-300">${lead.rentcast.lastSalePrice.toLocaleString()}{lead.rentcast.lastSaleDate ? ` (${lead.rentcast.lastSaleDate})` : ''}</span>
+                        </div>
+                      )}
+                      {(lead.rentcast.sqft || lead.rentcast.beds) && (
+                        <div className="flex gap-3 text-slate-500">
+                          {lead.rentcast.beds && <span>{lead.rentcast.beds} bed</span>}
+                          {lead.rentcast.baths && <span>{lead.rentcast.baths} bath</span>}
+                          {lead.rentcast.sqft && <span>{lead.rentcast.sqft.toLocaleString()} sqft</span>}
+                          {lead.rentcast.yearBuilt && <span>Built {lead.rentcast.yearBuilt}</span>}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <div className="flex gap-2 pt-1 flex-wrap">
                     {!contacted.has(lead.woId) && (
                       <Button
