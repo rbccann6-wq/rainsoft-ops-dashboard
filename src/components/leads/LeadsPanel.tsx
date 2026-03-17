@@ -189,7 +189,20 @@ export function LeadsPanel() {
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-sm font-semibold text-white">{lead.customerName}</p>
-                      <p className="text-xs text-slate-500">WO #{lead.woId} · {timeAgo(lead.emailDate)}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-xs text-slate-500">WO #{lead.woId} · {timeAgo(lead.emailDate)}</p>
+                        {lead.sfLeadId && (
+                          <a
+                            href={`https://rainsoftse.my.salesforce.com/${lead.sfLeadId}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-emerald-400 hover:text-emerald-300 flex items-center gap-1"
+                            title="Open in Salesforce"
+                          >
+                            ✅ SF
+                          </a>
+                        )}
+                      </div>
                     </div>
                     <div className="flex items-center gap-2">
                       {exportState === 'done' && (

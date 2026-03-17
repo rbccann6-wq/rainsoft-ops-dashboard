@@ -222,12 +222,18 @@ router.get('/leads', async (req, res) => {
       .filter(r => r.status === 'rejected')
       .map(r => r.reason?.message)
 
-    // Auto-sync new leads to Salesforce (fire and forget — don't block response)
-    syncLeadsToSalesforce(successful).catch(err =>
+    // Sync to Salesforce and attach SF IDs to leads before responding
+    const sfIdMap = await syncLeadsToSalesforce(successful).catch(err => {
       console.error('[SF sync] Failed:', err.message)
-    )
+      return {}
+    })
 
-    res.json({ leads: successful, errors: failed })
+    const leadsWithSf = successful.map(l => ({
+      ...l,
+      sfLeadId: sfIdMap[l.woId] || null,
+    }))
+
+    res.json({ leads: leadsWithSf, errors: failed })
   } catch (err) {
     console.error('GET /api/leads:', err.message)
     res.status(500).json({ error: err.message })
@@ -276,14 +282,26 @@ async function sfCreate(obj, data) {
 
 async function syncLeadsToSalesforce(leads) {
   let created = 0
+  const sfIdMap = {}  // woId → sfLeadId
+
+  // First pass: look up any already-synced leads
   for (const lead of leads) {
     if (!lead.woId) continue
     try {
-      // Check if already synced (check Leads object)
       const existing = await sfQuery(
         `SELECT Id FROM Lead WHERE Important_Details_Notes__c LIKE '%WO#${lead.woId}%' LIMIT 1`
       )
-      if (existing.totalSize > 0) continue
+      if (existing.totalSize > 0) {
+        sfIdMap[lead.woId] = existing.records[0].Id
+      }
+    } catch {}
+  }
+
+  for (const lead of leads) {
+    if (!lead.woId) continue
+    try {
+      // Already found in first pass
+      if (sfIdMap[lead.woId]) continue
 
       const nameParts = (lead.customerName || '').trim().split(' ')
       const firstName = nameParts[0] || ''
@@ -319,6 +337,7 @@ async function syncLeadsToSalesforce(leads) {
       const result = await sfCreate('Lead', record)
       if (result.success) {
         console.log(`[SF sync] Created Lead: ${lead.customerName} WO#${lead.woId} → ${result.id}`)
+        sfIdMap[lead.woId] = result.id
         created++
       } else {
         console.warn(`[SF sync] Failed ${lead.woId}:`, JSON.stringify(result).slice(0, 150))
@@ -328,6 +347,7 @@ async function syncLeadsToSalesforce(leads) {
     }
   }
   if (created > 0) console.log(`[SF sync] Synced ${created} new Lowe's leads to Salesforce`)
+  return sfIdMap
 }
 
 // ─── GET /api/smartmail-leads — SmartMail scanned card leads ─────────────────
