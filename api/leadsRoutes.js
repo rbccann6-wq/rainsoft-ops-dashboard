@@ -354,14 +354,32 @@ function parseAddress(raw) {
   return { street: raw }
 }
 
-// In-memory guard: never call Rentcast for same address twice in one server session
+// Hard lock: track every address called — never call twice regardless of cache state
 const _rentcastCalled = new Set()
 
 async function getRentcastData(address, city, state, zip) {
   if (!address) return null
-  const key = `${address},${city},${state}`
-  if (_rentcastCalled.has(key)) return null  // already called this session
+  const key = [address, city, state].filter(Boolean).join(',').toLowerCase().trim()
+  
+  // Layer 1: in-memory dedup — never call same address twice in this server session
+  if (_rentcastCalled.has(key)) {
+    console.log(`[rentcast] BLOCKED (in-memory): ${key}`)
+    return null
+  }
+  
+  // Layer 2: check Supabase cache — if this address was ever fetched, skip API call
+  try {
+    const sb = getSB()
+    const { data } = await sb.from('lowes_leads_cache').select('rentcast').ilike('address', `%${address}%`).maybeSingle()
+    if (data?.rentcast) {
+      console.log(`[rentcast] HIT (supabase): ${key}`)
+      _rentcastCalled.add(key)
+      return data.rentcast
+    }
+  } catch {}
+  
   _rentcastCalled.add(key)
+  console.log(`[rentcast] CALLING API: ${key}`)
   const fullAddr = [address, city, state, zip].filter(Boolean).join(', ')
   const result = { price: null, low: null, high: null, owner: null, ownerOccupied: null, lastSaleDate: null, lastSalePrice: null, sqft: null, beds: null, baths: null, yearBuilt: null }
   try {
