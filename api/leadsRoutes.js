@@ -272,15 +272,27 @@ router.get('/leads', async (req, res) => {
       .filter(r => r.status === 'rejected')
       .map(r => r.reason?.message)
 
-    // Sync to Salesforce and attach SF IDs to leads before responding
-    const sfIdMap = await syncLeadsToSalesforce(successful).catch(err => {
-      console.error('[SF sync] Failed:', err.message)
-      return {}
-    })
+    // Only sync new leads (not in cache yet) — never re-sync known WO#s
+    const sb = getSB()
+    const knownIds = new Set()
+    for (const lead of successful) {
+      if (!lead.woId) continue
+      const { data } = await sb.from('lowes_leads_cache').select('sf_lead_id').eq('wo_id', lead.woId).maybeSingle()
+      if (data?.sf_lead_id) knownIds.add(lead.woId)
+    }
+    const newLeads = successful.filter(l => l.woId && !knownIds.has(l.woId))
 
+    const sfIdMap = newLeads.length > 0
+      ? await syncLeadsToSalesforce(successful).catch(err => {
+          console.error('[SF sync] Failed:', err.message)
+          return {}
+        })
+      : {}
+
+    // Build final response with SF IDs from cache + any newly synced
     const leadsWithSf = successful.map(l => ({
       ...l,
-      sfLeadId: sfIdMap[l.woId] || null,
+      sfLeadId: l.sfLeadId || sfIdMap[l.woId] || null,
     }))
 
     res.json({ leads: leadsWithSf, errors: failed })
@@ -342,8 +354,14 @@ function parseAddress(raw) {
   return { street: raw }
 }
 
+// In-memory guard: never call Rentcast for same address twice in one server session
+const _rentcastCalled = new Set()
+
 async function getRentcastData(address, city, state, zip) {
   if (!address) return null
+  const key = `${address},${city},${state}`
+  if (_rentcastCalled.has(key)) return null  // already called this session
+  _rentcastCalled.add(key)
   const fullAddr = [address, city, state, zip].filter(Boolean).join(', ')
   const result = { price: null, low: null, high: null, owner: null, ownerOccupied: null, lastSaleDate: null, lastSalePrice: null, sqft: null, beds: null, baths: null, yearBuilt: null }
   try {
