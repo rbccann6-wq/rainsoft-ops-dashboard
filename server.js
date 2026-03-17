@@ -41,12 +41,21 @@ app.get('*', (req, res) => {
   res.sendFile(join(__dirname, 'dist', 'index.html'))
 })
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`RainSoft Ops Dashboard running on port ${PORT}`)
+
   // Register/renew Graph webhook subscription for FastField emails
   ensureSubscription().catch(err => console.error('Webhook setup failed:', err.message))
   // Auto-renew every 2 days (subscriptions expire after 3)
   setInterval(() => {
     ensureSubscription().catch(err => console.error('Webhook renewal failed:', err.message))
   }, 2 * 24 * 60 * 60 * 1000)
+
+  // Nightly purge of temp PDF copies (originals stay in M365 inbox)
+  try {
+    const { createRequire } = await import('module')
+    const req = createRequire(import.meta.url)
+    const { schedulePurge } = req('/Users/rebeccasbot/Projects/finance-agent/src/pdfPurge')
+    schedulePurge()
+  } catch { /* finance-agent not available in this env — skip */ }
 })
