@@ -159,7 +159,7 @@ async function fetchWorkOrder(woId) {
       phone: cellMatch ? cellMatch[1].trim() : '',
       officePhone: officeMatch ? officeMatch[1].trim() : '',
       email: emailMatch ? emailMatch[1] : '',
-      address: addrMatch ? addrMatch[1].replace(/\s+/g, ' ').trim() : '',
+      address: addrMatch ? addrMatch[1].replace(/\s+/g, ' ').replace(/function\s+\w+\(.*$/s, '').trim() : '',
       store: storeMatch ? storeMatch[1].trim() : '',
       status: statusMatch ? statusMatch[0] : 'Appointment Pending',
     }
@@ -173,23 +173,25 @@ router.get('/leads', async (req, res) => {
     const token = await withRetry(() => getGraphToken(), 'graph-token')
     const mailbox = process.env.MAILBOX_EMAIL
 
-    // Fetch Lowe's appointment emails
+    // Fetch Lowe's appointment emails — use $search instead of $filter (filter on from requires special index)
     const qs = new URLSearchParams({
-      $filter: "from/emailAddress/address eq 'do-not-reply@email.loweshomeservices.com'",
+      $search: '"loweshomeservices"',
       $top: '20',
-      $orderby: 'receivedDateTime desc',
-      $select: 'id,subject,receivedDateTime,body,bodyPreview',
+      $select: 'id,subject,receivedDateTime,body,bodyPreview,from',
     })
 
     const resp = await withRetry(async () => {
       const r = await fetch(`https://graph.microsoft.com/v1.0/users/${mailbox}/messages?${qs}`, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: 'eventual' },
       })
-      if (!r.ok) throw new Error(`Graph ${r.status}`)
+      if (!r.ok) throw new Error(`Graph ${r.status}: ${await r.text()}`)
       return r.json()
     }, 'graph-fetch-lowe-emails')
 
-    const emails = resp.value || []
+    // Filter to only Lowe's sender emails
+    const emails = (resp.value || []).filter(e =>
+      e.from?.emailAddress?.address?.toLowerCase().includes('lowes')
+    )
 
     // Extract WO IDs
     const woEmails = emails.map(email => {
@@ -234,23 +236,25 @@ router.get('/smartmail-leads', async (req, res) => {
     const token = await withRetry(() => getGraphToken(), 'graph-token')
     const mailbox = process.env.MAILBOX_EMAIL
 
-    // Fetch recent SmartMail emails with attachments
+    // Fetch recent SmartMail emails — use $search for reliability
     const qs = new URLSearchParams({
-      $filter: "from/emailAddress/address eq 'leads@smartmailgroup.com' and hasAttachments eq true",
+      $search: '"smartmailgroup"',
       $top: '10',
-      $orderby: 'receivedDateTime desc',
-      $select: 'id,subject,receivedDateTime,hasAttachments',
+      $select: 'id,subject,receivedDateTime,hasAttachments,from',
     })
 
     const resp = await withRetry(async () => {
       const r = await fetch(`https://graph.microsoft.com/v1.0/users/${mailbox}/messages?${qs}`, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: 'eventual' },
       })
-      if (!r.ok) throw new Error(`Graph ${r.status}`)
+      if (!r.ok) throw new Error(`Graph ${r.status}: ${await r.text()}`)
       return r.json()
     }, 'graph-fetch-smartmail-emails')
 
-    const emails = resp.value || []
+    // Filter to only SmartMail sender emails
+    const emails = (resp.value || []).filter(e =>
+      e.from?.emailAddress?.address?.toLowerCase().includes('smartmail')
+    )
 
     // Return email metadata — OCR processing happens on demand
     const result = emails.map(e => ({
