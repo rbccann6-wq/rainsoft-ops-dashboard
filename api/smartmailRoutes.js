@@ -4,7 +4,7 @@
  */
 
 import express from 'express'
-import { execSync } from 'child_process'
+// execSync removed — no longer needed (Claude reads PDF natively)
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -179,53 +179,56 @@ async function verify(lead, printedName, printedAddr) {
 
 // ── PDF → images using Python ─────────────────────────────────────────────────
 
-function pdfToImages(pdfPath, outDir) {
-  fs.mkdirSync(outDir, { recursive: true })
-  const script = `
-import pdfplumber, sys, os
-pdf_path = sys.argv[1]
-out_dir = sys.argv[2]
-with pdfplumber.open(pdf_path) as pdf:
-    for i, page in enumerate(pdf.pages):
-        img = page.to_image(resolution=150)
-        img.save(os.path.join(out_dir, f'page_{i+1}.png'))
-    print(len(pdf.pages))
-`
-  const tmpScript = '/tmp/pdf2img.py'
-  fs.writeFileSync(tmpScript, script)
-  const count = execSync(`python3 ${tmpScript} "${pdfPath}" "${outDir}"`, { timeout: 60000 }).toString().trim()
-  return parseInt(count) || 0
-}
+// ── Claude native PDF OCR (no image conversion needed) ───────────────────────
+// Passes the entire PDF to Claude with the PDF beta feature.
+// Claude reads all pages and returns an array of lead objects.
 
-// ── Claude vision OCR ─────────────────────────────────────────────────────────
+async function ocrPdfAllPages(pdfPath) {
+  const pdfData = fs.readFileSync(pdfPath).toString('base64')
 
-async function ocrPage(imagePath) {
-  const imgData = fs.readFileSync(imagePath).toString('base64')
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
       'x-api-key': process.env.ANTHROPIC_API_KEY,
       'anthropic-version': '2023-06-01',
+      'anthropic-beta': 'pdfs-2024-09-25',
       'content-type': 'application/json',
     },
     body: JSON.stringify({
       model: 'claude-opus-4-5',
-      max_tokens: 1024,
+      max_tokens: 8192,
       messages: [{
         role: 'user',
         content: [
-          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: imgData } },
-          { type: 'text', text: 'Extract all data from this water test lead card. Return ONLY valid JSON with these exact fields: full_name (handwritten name), address (handwritten street address only), city (string), state (2-letter code), zip (string), phone (string), email (string), water_source ("City" or "Well"), buys_bottled_water ("Yes" or "No"), homeowner ("Yes" or "No" or null if not on card), water_conditions (array from: Chlorine Smell, Brown Stains, Scale Deposits, Rotten Smell, Cloudiness), water_quality ("Good" or "Fair" or "Poor"), filtration (array from: Refrigerator, Whole Home, Sink, None), tds (number from lab section or null), hd (number from lab section or null), ph (number from lab section or null), sample_date (date water sample was taken, as string, or null), printed_name (the PRINTED/TYPED name from the mailing label), printed_address (the PRINTED/TYPED street address from mailing label). If a field is blank or unclear use null. Return ONLY the JSON object, no explanation.' }
+          { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfData } },
+          { type: 'text', text: `This PDF contains multiple water test lead cards, one per page. Extract data from EVERY page that has a filled-out lead card (skip blank pages or envelope pages).
+
+Return a JSON array where each element represents one lead card with these fields:
+full_name (handwritten name), address (handwritten street only), city, state (2-letter), zip, phone, email,
+water_source ("City" or "Well"), buys_bottled_water ("Yes"/"No"), homeowner ("Yes"/"No" or null),
+water_conditions (array from: Chlorine Smell, Brown Stains, Scale Deposits, Rotten Smell, Cloudiness),
+water_quality ("Good"/"Fair"/"Poor"), filtration (array from: Refrigerator, Whole Home, Sink, None),
+tds (number or null), hd (number or null), ph (number or null),
+sample_date (string or null), printed_name (PRINTED name from mailing label), printed_address (PRINTED street from mailing label).
+
+Use null for missing fields. Return ONLY the JSON array, no explanation.` }
         ]
       }]
     })
   })
-  if (!r.ok) throw new Error(`Claude API ${r.status}`)
+
+  if (!r.ok) {
+    const err = await r.text()
+    throw new Error(`Claude PDF API ${r.status}: ${err.slice(0, 200)}`)
+  }
+
   const d = await r.json()
   const text = d.content?.[0]?.text || ''
-  const jsonMatch = text.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) throw new Error('No JSON in Claude response')
-  return { parsed: JSON.parse(jsonMatch[0]), raw: text }
+  const jsonMatch = text.match(/\[[\s\S]*\]/)
+  if (!jsonMatch) throw new Error(`No JSON array in Claude response: ${text.slice(0, 200)}`)
+
+  const leads = JSON.parse(jsonMatch[0])
+  return leads.filter(l => l.full_name) // skip blank entries
 }
 
 // ── Download PDF from M365 ────────────────────────────────────────────────────
@@ -286,27 +289,22 @@ router.post('/smartmail/process-batch', async (req, res) => {
     const filename = await withRetry(() => downloadPdf(emailId, pdfPath))
     console.log(`[smartmail] Downloaded ${filename}`)
 
-    // Convert to images
-    const pageCount = pdfToImages(pdfPath, imgDir)
-    console.log(`[smartmail] Converted ${pageCount} pages`)
+    // Use Claude's native PDF support — no image conversion needed, processes all pages at once
+    let allLeads = []
+    try {
+      allLeads = await ocrPdfAllPages(pdfPath)
+      console.log(`[smartmail] Claude extracted ${allLeads.length} leads from PDF`)
+    } catch (err) {
+      console.error(`[smartmail] OCR failed:`, err.message)
+      return res.status(500).json({ ok: false, error: `OCR failed: ${err.message}` })
+    }
 
     const sb = getSB()
     const results = []
 
-    for (let i = 1; i <= pageCount; i++) {
-      const imgPath = path.join(imgDir, `page_${i}.png`)
-      if (!fs.existsSync(imgPath)) continue
-
-      let lead = null, raw = ''
-      try {
-        const ocr = await ocrPage(imgPath)
-        lead = ocr.parsed; raw = ocr.raw
-      } catch (err) {
-        console.error(`[smartmail] OCR failed page ${i}:`, err.message)
-        continue
-      }
-
-      if (!lead?.full_name) continue  // skip blank/envelope pages
+    for (let i = 0; i < allLeads.length; i++) {
+      const lead = allLeads[i]
+      if (!lead?.full_name) continue
 
       // Verify: card cross-check + area code + email DNS
       const v = await verify(lead, lead.printed_name, lead.printed_address)
@@ -318,7 +316,7 @@ router.post('/smartmail/process-batch', async (req, res) => {
       const row = {
         batch_id: emailId,
         batch_subject: subject || filename,
-        page_number: i,
+        page_number: i + 1,
         full_name: lead.full_name,
         address: lead.address,
         city: lead.city,
@@ -357,10 +355,8 @@ router.post('/smartmail/process-batch', async (req, res) => {
         beds: rentcast?.beds || null,
         baths: rentcast?.baths || null,
         year_built: rentcast?.yearBuilt || null,
-        // Flag non-homeowners in status so dashboard shows it
-        status: lead.homeowner === 'No' ? 'no_homeowner' : 'pending',
-        status: 'pending',
-        ocr_raw: raw,
+                status: lead.homeowner === 'No' ? 'no_homeowner' : 'pending',
+        ocr_raw: null,
       }
 
       const { data, error } = await sb.from('smartmail_leads').insert(row).select('id').single()
@@ -368,8 +364,7 @@ router.post('/smartmail/process-batch', async (req, res) => {
       else results.push({ ...row, id: data.id })
     }
 
-    // Cleanup images (keep PDF for reprocessing)
-    try { fs.rmSync(imgDir, { recursive: true }) } catch {}
+    // No images to clean up — Claude reads PDF natively
 
     res.json({ ok: true, batchId: emailId, total: results.length, leads: results })
   } catch (err) {
