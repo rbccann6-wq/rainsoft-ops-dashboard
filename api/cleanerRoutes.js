@@ -93,9 +93,37 @@ function isSafe(senderEmail) {
   return SAFE_DOMAINS.has(domain)
 }
 
+// ─── Scan cache (persisted to disk so it survives server restarts) ────────────
+
+import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const SCAN_CACHE_PATH = path.join(__dirname, '..', 'data', 'scan-cache.json')
+
+function loadScanCache() {
+  try {
+    if (fs.existsSync(SCAN_CACHE_PATH)) {
+      return JSON.parse(fs.readFileSync(SCAN_CACHE_PATH, 'utf8'))
+    }
+  } catch { /* ignore */ }
+  return null
+}
+
+function saveScanCache(state) {
+  try {
+    fs.mkdirSync(path.dirname(SCAN_CACHE_PATH), { recursive: true })
+    fs.writeFileSync(SCAN_CACHE_PATH, JSON.stringify(state))
+  } catch (err) {
+    console.warn('Could not save scan cache:', err.message)
+  }
+}
+
 // ─── Background scan state (in-memory, survives the request lifecycle) ────────
 
-let scanState = {
+const cached = loadScanCache()
+let scanState = cached ?? {
   status: 'idle', // idle | running | done | error
   startedAt: null,
   finishedAt: null,
@@ -154,6 +182,8 @@ async function runFullScan() {
 
     scanState.status = 'done'
     scanState.finishedAt = new Date().toISOString()
+    // Persist to disk — won't rescan on next page load
+    saveScanCache(scanState)
   } catch (err) {
     scanState.status = 'error'
     scanState.error = err.message
@@ -162,11 +192,24 @@ async function runFullScan() {
 }
 
 // ─── POST /api/cleaner/scan/start — kick off background scan ─────────────────
+// Pass { force: true } to rescan even if results already cached.
 
 router.post('/cleaner/scan/start', (req, res) => {
-  if (scanState.status !== 'running') {
-    runFullScan() // fire and forget — runs in background
+  const force = req.body?.force === true
+
+  if (scanState.status === 'done' && !force) {
+    // Already have results — don't rescan
+    return res.json({ started: false, status: 'done', message: 'Using cached results. Pass force:true to rescan.' })
   }
+
+  if (scanState.status !== 'running') {
+    if (force) {
+      // Reset state for fresh scan
+      scanState = { status: 'idle', startedAt: null, finishedAt: null, pagesScanned: 0, totalScanned: 0, senders: [], error: null }
+    }
+    runFullScan()
+  }
+
   res.json({ started: true, status: scanState.status })
 })
 

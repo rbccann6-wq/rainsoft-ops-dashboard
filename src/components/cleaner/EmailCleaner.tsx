@@ -103,14 +103,24 @@ export function EmailCleaner() {
     pollStatus()
   }, [pollStatus])
 
-  const startScan = useCallback(async () => {
+  const startScan = useCallback(async (force = false) => {
     setScanError(null)
     try {
-      await apiFetch('/cleaner/scan/start', { method: 'POST' })
+      await apiFetch('/cleaner/scan/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force }),
+      })
       await pollStatus()
-      // Start polling every 3 seconds
+      // Only poll if actually running
       if (pollRef.current) clearInterval(pollRef.current)
-      pollRef.current = setInterval(pollStatus, 3000)
+      pollRef.current = setInterval(async () => {
+        const data = await apiFetch<ScanStatus>('/cleaner/scan/status')
+        setScanStatus(data)
+        if (data.status === 'done' || data.status === 'error') {
+          clearInterval(pollRef.current!)
+        }
+      }, 3000)
     } catch (err) {
       setScanError((err as Error).message)
     }
@@ -215,18 +225,18 @@ export function EmailCleaner() {
         <div className="space-y-4">
 
           {/* Not started yet */}
-          {!scanStatus && !scanError && (
+          {scanStatus?.status === 'idle' && !scanError && (
             <Card>
               <div className="p-8 text-center space-y-4">
                 <Trash2 className="w-10 h-10 text-slate-600 mx-auto" />
                 <div>
                   <p className="text-white font-medium">Scan all 60,000+ emails</p>
                   <p className="text-sm text-slate-400 mt-1">
-                    Runs in the background — groups every email by sender. You pick who to delete.
-                    Safe business senders are protected and can't be touched.
+                    Runs once in the background — results are cached so you never pay to scan again. You pick who to delete.
+                    Safe business senders are protected.
                   </p>
                 </div>
-                <Button variant="primary" onClick={startScan}>Start Full Scan</Button>
+                <Button variant="primary" onClick={() => startScan()}>Start Full Scan</Button>
               </div>
             </Card>
           )}
@@ -268,7 +278,7 @@ export function EmailCleaner() {
                 <p className="text-sm font-semibold text-red-300">Scan failed</p>
                 <p className="text-xs text-slate-400 mt-0.5">{scanError ?? scanStatus?.error}</p>
               </div>
-              <Button variant="ghost" size="sm" onClick={startScan} className="ml-auto">Retry</Button>
+              <Button variant="ghost" size="sm" onClick={() => startScan()} className="ml-auto">Retry</Button>
             </div>
           )}
 
@@ -280,6 +290,7 @@ export function EmailCleaner() {
                   <p className="text-xs text-slate-500 mb-1">Emails Scanned</p>
                   <p className="text-2xl font-bold text-white">{scanStatus!.totalScanned.toLocaleString()}</p>
                   {isRunning && <p className="text-xs text-blue-400 mt-0.5">still scanning…</p>}
+                  {isDone && scanStatus?.finishedAt && <p className="text-xs text-slate-500 mt-0.5">cached · {new Date(scanStatus.finishedAt).toLocaleDateString()}</p>}
                 </div></Card>
                 <Card><div className="p-4 text-center">
                   <p className="text-xs text-slate-500 mb-1">Unique Senders</p>
@@ -312,7 +323,7 @@ export function EmailCleaner() {
                   </button>
                 ))}
                 {isDone && (
-                  <Button variant="ghost" size="sm" onClick={startScan}>
+                  <Button variant="ghost" size="sm" onClick={() => startScan(true)}>
                     <RefreshCw className="w-3 h-3" /> Rescan
                   </Button>
                 )}
