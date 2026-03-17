@@ -27,6 +27,9 @@ interface SmartMailLead {
   filtration: string | null
   homeowner: string | null
   sample_date: string | null
+  house_value: number | null
+  house_value_low: number | null
+  house_value_high: number | null
   tds: number | null
   hd: number | null
   ph: number | null
@@ -212,6 +215,19 @@ export function SmartMailReview({ batch, onDone }: { batch: SmartMailBatch; onDo
                       </span>
                     )}
                   </div>
+
+                  {/* House value */}
+                  {lead.house_value && (
+                    <div className="flex items-center gap-2 bg-slate-800/60 border border-slate-700 rounded-lg px-3 py-2">
+                      <span className="text-xs text-slate-400">Est. Home Value:</span>
+                      <span className="text-sm font-semibold text-white">${lead.house_value.toLocaleString()}</span>
+                      {lead.house_value_low && lead.house_value_high && (
+                        <span className="text-xs text-slate-500">
+                          (${lead.house_value_low.toLocaleString()} – ${lead.house_value_high.toLocaleString()})
+                        </span>
+                      )}
+                    </div>
+                  )}
 
                   {/* Homeowner badge */}
                   {lead.homeowner && (

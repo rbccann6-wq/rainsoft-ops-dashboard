@@ -16,7 +16,7 @@ const router = express.Router()
 const DATA_DIR = path.join(__dirname, '..', 'data', 'smartmail')
 const SF_INSTANCE = 'https://rainsoftse.my.salesforce.com'
 const BOTTLE_DROP_RT = '01236000001QBeKAAW'
-const BRAVE_KEY = 'BSA3VL7tgNknVMsSkZM7Qjhz9Qj0nIq'
+const RENTCAST_KEY = process.env.RENTCAST_API_KEY || '85cb3067516d4fbbac2693c806367dc2'
 
 // ── Clients ───────────────────────────────────────────────────────────────────
 
@@ -55,6 +55,20 @@ async function getSfToken() {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+async function getRentcastValue(address, city, state, zip) {
+  if (!address || !city || !state) return null
+  try {
+    const fullAddr = [address, city, state, zip].filter(Boolean).join(', ')
+    const url = `https://api.rentcast.io/v1/avm/value?` + new URLSearchParams({
+      address: fullAddr, propertyType: 'Single Family'
+    })
+    const r = await fetch(url, { headers: { 'X-Api-Key': RENTCAST_KEY, Accept: 'application/json' } })
+    if (!r.ok) return null
+    const d = await r.json()
+    return { price: d.price, low: d.priceRangeLow, high: d.priceRangeHigh }
+  } catch { return null }
+}
 
 async function withRetry(fn, max = 3) {
   let err
@@ -266,6 +280,9 @@ router.post('/smartmail/process-batch', async (req, res) => {
       const v = await verify(lead, lead.printed_name, lead.printed_address)
       const conf = v.confidence
 
+      // Rentcast property value lookup
+      const rentcast = await getRentcastValue(lead.address, lead.city, lead.state, lead.zip)
+
       const row = {
         batch_id: emailId,
         batch_subject: subject || filename,
@@ -296,6 +313,9 @@ router.post('/smartmail/process-batch', async (req, res) => {
         printed_address: lead.printed_address || null,
         homeowner: lead.homeowner || null,
         sample_date: lead.sample_date || null,
+        house_value: rentcast?.price || null,
+        house_value_low: rentcast?.low || null,
+        house_value_high: rentcast?.high || null,
         // Flag non-homeowners in status so dashboard shows it
         status: lead.homeowner === 'No' ? 'no_homeowner' : 'pending',
         status: 'pending',
@@ -435,6 +455,7 @@ router.post('/smartmail/push-to-sf/:batchId', async (req, res) => {
       // TDS: add 100 to card value (per business rule)
       if (lead.tds != null)      record.TDS_Level__c         = lead.tds + 100
       if (lead.sample_date)      record.Bottle_Drop_Sample_Date__c = lead.sample_date
+      if (lead.house_value)      record.House_Value__c              = lead.house_value
 
       const r = await fetch(`${SF_INSTANCE}/services/data/v59.0/sobjects/Lead`, {
         method: 'POST',
