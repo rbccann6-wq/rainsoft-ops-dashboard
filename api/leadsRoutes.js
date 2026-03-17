@@ -240,17 +240,19 @@ router.get('/leads', async (req, res) => {
         const rentcast = await getRentcastData(addrParsed.street, addrParsed.city, addrParsed.state, addrParsed.zip).catch(() => null)
 
         // Save to cache
-        await sb.from('lowes_leads_cache').upsert({
-          wo_id: woId,
-          customer_name: wo.customerName,
-          phone: wo.phone,
-          office_phone: wo.officePhone,
-          email: wo.email,
-          address: wo.address,
-          store: wo.store,
-          status: wo.status,
-          rentcast: rentcast || null,
-        }, { onConflict: 'wo_id' }).catch(() => {})
+        try {
+          await sb.from('lowes_leads_cache').upsert({
+            wo_id: woId,
+            customer_name: wo.customerName,
+            phone: wo.phone,
+            office_phone: wo.officePhone,
+            email: wo.email,
+            address: wo.address,
+            store: wo.store,
+            status: wo.status,
+            rentcast: rentcast || null,
+          }, { onConflict: 'wo_id' })
+        } catch {}
 
         return {
           ...wo,
@@ -430,7 +432,7 @@ async function syncLeadsToSalesforce(leads) {
       )
       if (existing.totalSize > 0) {
         sfIdMap[lead.woId] = existing.records[0].Id
-        sb.from('lowes_leads_cache').update({ sf_lead_id: existing.records[0].Id }).eq('wo_id', lead.woId).catch(() => {})
+        try { await sb.from('lowes_leads_cache').update({ sf_lead_id: existing.records[0].Id }).eq('wo_id', lead.woId) } catch {}
       }
     } catch {}
   }
@@ -488,7 +490,7 @@ async function syncLeadsToSalesforce(leads) {
         sfIdMap[lead.woId] = result.id
         created++
         // Update cache with SF lead ID
-        getSB().from('lowes_leads_cache').update({ sf_lead_id: result.id }).eq('wo_id', lead.woId).catch(() => {})
+        try { await getSB().from('lowes_leads_cache').update({ sf_lead_id: result.id }).eq('wo_id', lead.woId) } catch {}
       } else {
         console.warn(`[SF sync] Failed ${lead.woId}:`, JSON.stringify(result).slice(0, 150))
       }
