@@ -289,14 +289,18 @@ router.post('/smartmail/process-batch', async (req, res) => {
     const filename = await withRetry(() => downloadPdf(emailId, pdfPath))
     console.log(`[smartmail] Downloaded ${filename}`)
 
-    // Use Claude's native PDF support — no image conversion needed, processes all pages at once
+    // Acknowledge immediately — process async to avoid Render's 30s timeout
+    res.json({ ok: true, batchId: emailId, status: 'processing', message: 'Processing started — check back in 30 seconds' })
+
+    // Process in background
+    ;(async () => {
     let allLeads = []
     try {
       allLeads = await ocrPdfAllPages(pdfPath)
       console.log(`[smartmail] Claude extracted ${allLeads.length} leads from PDF`)
     } catch (err) {
       console.error(`[smartmail] OCR failed:`, err.message)
-      return res.status(500).json({ ok: false, error: `OCR failed: ${err.message}` })
+      return
     }
 
     const sb = getSB()
@@ -365,11 +369,12 @@ router.post('/smartmail/process-batch', async (req, res) => {
     }
 
     // No images to clean up — Claude reads PDF natively
+    console.log(`[smartmail] Batch complete: ${results.length} leads processed`)
+    })().catch(err => console.error('[smartmail] background process error:', err.message))
 
-    res.json({ ok: true, batchId: emailId, total: results.length, leads: results })
   } catch (err) {
     console.error('[smartmail] process-batch error:', err.message)
-    res.status(500).json({ ok: false, error: err.message })
+    if (!res.headersSent) res.status(500).json({ ok: false, error: err.message })
   }
 })
 

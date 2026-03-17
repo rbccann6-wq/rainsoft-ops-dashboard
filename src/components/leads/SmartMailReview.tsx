@@ -90,14 +90,24 @@ export function SmartMailReview({ batch, onDone }: { batch: SmartMailBatch; onDo
     setError(null)
     setProgress('Downloading PDF…')
     try {
-      setProgress('Running OCR on each page (this takes ~30 seconds)…')
-      const result = await apiFetch<{ leads: SmartMailLead[]; total: number }>('/smartmail/process-batch', {
+      setProgress('Sending PDF to Claude for processing…')
+      // Fire and forget — server processes async, we poll for results
+      await apiFetch('/smartmail/process-batch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ emailId: batch.emailId, subject: batch.subject }),
       })
-      setLeads(result.leads)
-      setProgress('')
+      // Poll every 5s for up to 2 minutes
+      setProgress('Processing in background…')
+      let attempts = 0
+      while (attempts < 24) {
+        await new Promise(r => setTimeout(r, 5000))
+        attempts++
+        const data = await apiFetch<SmartMailLead[]>(`/smartmail/batch/${encodeURIComponent(batch.emailId)}`)
+        if (data.length > 0) { setLeads(data); setProgress(''); break }
+        setProgress(`Processing… (${attempts * 5}s elapsed)`)
+      }
+      if (attempts >= 24) setError('Timed out — try refreshing')
     } catch (err) {
       setError((err as Error).message)
       setProgress('')
