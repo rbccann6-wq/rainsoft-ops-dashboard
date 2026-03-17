@@ -18,7 +18,9 @@ export async function loadDynamicSafelist() {
 // ─── NEVER touch these — always keep in inbox ────────────────────────────────
 const SAFE_DOMAINS = new Set([
   'rainsoftse.com', 'rainsoft.com', 'pentair.com', 'dialpad.com',
-  'salesforce.com', 'docusign.net', 'docusign.com', 'fastfieldforms.com',
+  'salesforce.com', 'salesforceiq.com', 'force.com', 'exacttarget.com',
+  '00d36000000ptbfeai.com', // Salesforce org integration user — internal SF notifications
+  'docusign.net', 'docusign.com', 'fastfieldforms.com',
   'rippling.com', 'loweshomeservices.com', 'imeinc.com', 'trustedhomeservices.com',
   'homedepot.com', 'smartmailgroup.com', 'microsoft.com', 'microsoftonline.com',
   'aflac.com', 'accounts.google.com', 'wellsfargo.com', 'americanexpress.com',

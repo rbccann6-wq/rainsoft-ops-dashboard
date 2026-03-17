@@ -75,13 +75,14 @@ async function graphPost(path, token, body) {
 
 const SAFE_DOMAINS = new Set([
   'rainsoftse.com', 'rainsoft.com', 'pentair.com', 'dialpad.com',
-  'salesforce.com', 'docusign.net', 'docusign.com', 'fastfieldforms.com',
+  'salesforce.com', 'salesforceiq.com', 'force.com', 'exacttarget.com',
+  '00d36000000ptbfeai.com', // Salesforce org integration user — internal SF notifications
+  'docusign.net', 'docusign.com', 'fastfieldforms.com',
   'rippling.com', 'loweshomeservices.com', 'imeinc.com', 'trustedhomeservices.com',
   'homedepot.com', 'smartmailgroup.com', 'microsoft.com', 'microsoftonline.com',
   'aflac.com', 'accounts.google.com', 'wellsfargo.com', 'americanexpress.com',
   'welcome.americanexpress.com', 'squareup.com', 'legal.squareup.com',
-  'notify.wellsfargo.com', 'accountprotection.microsoft.com', 'docusign.net',
-  'account-security-noreply@accountprotection.microsoft.com',
+  'notify.wellsfargo.com', 'accountprotection.microsoft.com',
 ])
 
 function getDomain(email) {
