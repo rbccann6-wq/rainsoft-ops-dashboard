@@ -388,6 +388,16 @@ async function processNotification(messageId) {
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
+// POST /api/webhooks/process — internal: process a specific message ID (called by poller)
+router.post('/webhooks/process', express.json(), async (req, res) => {
+  const { messageId } = req.body
+  if (!messageId) return res.status(400).json({ error: 'messageId required' })
+  res.status(202).send() // acknowledge immediately
+  processNotification(messageId).catch(err =>
+    console.error('[webhooks/process] error:', err.message)
+  )
+})
+
 // GET /api/webhooks/graph — Graph validation handshake
 router.get('/webhooks/graph', (req, res) => {
   const { validationToken } = req.query

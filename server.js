@@ -13,6 +13,7 @@ import usageRoutes from './api/usageRoutes.js'
 import migrationRoutes from './api/migrationRoutes.js'
 import webhookRoutes, { ensureSubscription } from './api/webhookRoutes.js'
 import financeAgentRoutes from './api/financeAgentRoutes.js'
+import emailPollerRoutes, { startPoller } from './api/emailPollerRoutes.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -34,6 +35,7 @@ app.use('/api', usageRoutes)
 app.use('/api', migrationRoutes)
 app.use('/api', webhookRoutes)
 app.use('/api', financeAgentRoutes)
+app.use('/api', emailPollerRoutes)
 
 // Serve built React app
 app.use(express.static(join(__dirname, 'dist')))
@@ -46,12 +48,8 @@ app.get('*', (req, res) => {
 app.listen(PORT, async () => {
   console.log(`RainSoft Ops Dashboard running on port ${PORT}`)
 
-  // Register/renew Graph webhook subscription for FastField emails
-  ensureSubscription().catch(err => console.error('Webhook setup failed:', err.message))
-  // Auto-renew every 2 days (subscriptions expire after 3)
-  setInterval(() => {
-    ensureSubscription().catch(err => console.error('Webhook renewal failed:', err.message))
-  }, 2 * 24 * 60 * 60 * 1000)
+  // Start delta poller for FastField emails (replaces webhook — works through Cloudflare)
+  startPoller()
 
   // Nightly purge of temp PDF copies (originals stay in M365 inbox)
   try {
