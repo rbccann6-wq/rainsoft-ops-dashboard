@@ -110,6 +110,7 @@ export interface ImeLead {
   emailDate: string
   emailId: string
   contacted?: boolean
+  sfLeadId?: string | null
 }
 
 export interface SmartMailBatch {
