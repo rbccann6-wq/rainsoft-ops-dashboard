@@ -35,20 +35,19 @@ export function EmailDashboard() {
     setLoading(true)
     setAllEmails([])
     try {
-      // Auto-paginate and load everything — no manual "load more" needed
+      // Load 500 most recent — enough for daily use
+      // Bulk operations across all 60k are handled by the Cleaner tab
+      const MAX_EMAILS = 500
       let skip = 0
       let accumulated: Email[] = []
-      let more = true
 
-      while (more) {
+      while (accumulated.length < MAX_EMAILS) {
         const data = await fetchEmails({ top: 200, skip })
         accumulated = [...accumulated, ...data.emails]
-        // Update UI progressively so user sees emails appearing
         setAllEmails([...accumulated])
-        more = data.hasMore
+        if (!data.hasMore || accumulated.length >= MAX_EMAILS) break
         skip = data.nextSkip
-        // Brief pause between pages to avoid throttling
-        if (more) await new Promise(r => setTimeout(r, 300))
+        await new Promise(r => setTimeout(r, 200))
       }
 
       setUsingMock(false)
