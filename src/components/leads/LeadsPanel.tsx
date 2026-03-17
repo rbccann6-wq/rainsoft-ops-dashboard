@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Target, RefreshCw, Loader2, Phone, MapPin, Store, AlertCircle, CheckCircle2, Upload, Download } from 'lucide-react'
 import type { ImeLead, SmartMailBatch } from '@/types'
 import { fetchImeLeads, fetchSmartMailBatches, exportLeadToCrm, exportAllToCrm } from '@/lib/leadsApi'
@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils'
 
 // Module-level cache — survives tab switching, cleared only on explicit Refresh
 let _leadsCache: { leads: ImeLead[]; batches: SmartMailBatch[]; loadedAt: number } | null = null
+const CHECK_INTERVAL_MS = 30 * 60 * 1000  // 30 min background check
 
 function timeAgo(iso: string) {
   const diff = Date.now() - new Date(iso).getTime()
@@ -32,6 +33,8 @@ export function LeadsPanel() {
   const [bulkExporting, setBulkExporting] = useState(false)
   const [bulkResult, setBulkResult] = useState<{ exported: number; errors: number } | null>(null)
   const [activeTab, setActiveTab] = useState<'lowes' | 'smartmail'>('lowes')
+  const [newLeadCount, setNewLeadCount] = useState(0)
+  const checkIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const loadAll = useCallback(async (forceRefresh = false) => {
     // Use cache if available and not forcing refresh
@@ -58,8 +61,27 @@ export function LeadsPanel() {
     }
   }, [])
 
+  // Background check — only fetches WO numbers from cached email headers, no Rentcast
+  const checkForNewLeads = useCallback(async () => {
+    if (!_leadsCache) return
+    try {
+      const r = await fetch('/api/leads/check-new')
+      if (!r.ok) return
+      const { newCount } = await r.json()
+      if (newCount > 0) setNewLeadCount(newCount)
+    } catch { /* silent — background check */ }
+  }, [])
+
   // Load on mount — uses cache if available, no re-fetch on tab switch
   useEffect(() => { loadAll(false) }, [loadAll])
+
+  // Start background check every 30 min
+  useEffect(() => {
+    checkIntervalRef.current = setInterval(checkForNewLeads, CHECK_INTERVAL_MS)
+    return () => {
+      if (checkIntervalRef.current) clearInterval(checkIntervalRef.current)
+    }
+  }, [checkForNewLeads])
 
   const pendingCount = imeLeads.filter(l => !contacted.has(l.woId)).length
 
@@ -130,6 +152,20 @@ export function LeadsPanel() {
       </div>
 
       {/* Error state */}
+      {/* New leads banner */}
+      {newLeadCount > 0 && (
+        <button
+          onClick={() => { setNewLeadCount(0); loadAll(true) }}
+          className="w-full flex items-center justify-between gap-3 bg-blue-950/40 border border-blue-700/60 rounded-xl px-4 py-3 text-sm text-blue-300 hover:bg-blue-950/60 transition-colors"
+        >
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+            <span className="font-medium">{newLeadCount} new Lowe's lead{newLeadCount !== 1 ? 's' : ''} available</span>
+          </div>
+          <span className="text-xs text-blue-400">Click to load →</span>
+        </button>
+      )}
+
       {error && (
         <div className="flex items-start gap-3 bg-red-950/40 border border-red-700 rounded-xl p-4">
           <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />

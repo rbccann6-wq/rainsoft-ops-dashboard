@@ -287,6 +287,41 @@ router.get('/leads', async (req, res) => {
   }
 })
 
+// ── GET /api/leads/check-new — lightweight check for new WO#s (no Rentcast, no IME) ──
+router.get('/leads/check-new', async (req, res) => {
+  try {
+    const token = await withRetry(() => getGraphToken(), 'graph-token')
+    const mailbox = process.env.MAILBOX_EMAIL
+    const sb = getSB()
+
+    // Fetch recent Lowe's email subjects only (no body, no attachments)
+    const qs = new URLSearchParams({ '$search': '"loweshomeservices"', '$top': '10', '$select': 'id,subject' })
+    const r = await fetch(`https://graph.microsoft.com/v1.0/users/${mailbox}/messages?${qs}`, {
+      headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: 'eventual' }
+    })
+    if (!r.ok) return res.json({ newCount: 0 })
+    const data = await r.json()
+
+    // Extract WO numbers from subjects
+    const woIds = []
+    for (const msg of (data.value || []).filter(m => m.from?.emailAddress?.address?.includes('lowes') || m.subject?.includes('WO'))) {
+      const match = msg.subject?.match(/WO\s*#?\s*(\d{7,9})/i)
+      if (match) woIds.push(match[1])
+    }
+
+    if (!woIds.length) return res.json({ newCount: 0 })
+
+    // Check which ones are NOT in cache
+    const { data: cached } = await sb.from('lowes_leads_cache').select('wo_id').in('wo_id', woIds)
+    const cachedIds = new Set((cached || []).map(r => r.wo_id))
+    const newCount = woIds.filter(id => !cachedIds.has(id)).length
+
+    res.json({ newCount })
+  } catch (err) {
+    res.json({ newCount: 0 })
+  }
+})
+
 // ─── Salesforce auto-sync ─────────────────────────────────────────────────────
 
 const SF_INSTANCE = 'https://rainsoftse.my.salesforce.com'
