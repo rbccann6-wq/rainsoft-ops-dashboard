@@ -72,9 +72,10 @@ function saveProcessed(ids) {
 
 // ── Alert helper ──────────────────────────────────────────────────────────────
 
+import { execSync } from 'child_process'
+
 function alert(text) {
   try {
-    const { execSync } = require('child_process')
     execSync(`openclaw system event --text "${text.replace(/"/g, "'")}" --mode now`, { timeout: 10000 })
   } catch {}
 }
