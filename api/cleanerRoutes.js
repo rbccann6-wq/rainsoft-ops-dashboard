@@ -312,15 +312,40 @@ router.post('/cleaner/delete-sender', async (req, res) => {
 
     let deleted = 0
     let failed = 0
-    let url = `https://graph.microsoft.com/v1.0/users/${mailbox}/messages?` +
-      `$filter=from/emailAddress/address eq '${senderEmail.replace(/'/g, "''")}'&$top=100&$select=id`
+    // Search ALL mail folders using $filter per folder (Graph doesn't support cross-folder filter)
+    // Folders to clean: Inbox, Focused, Junk, Archive, and default messages endpoint
+    const foldersToClean = ['inbox', 'junkemail', 'archive', 'drafts']
+    const filterParam = `$filter=from/emailAddress/address eq '${senderEmail.replace(/'/g, "''")}'&$top=100&$select=id`
+    
+    // Also search primary messages endpoint (catches Focused + other views)
+    const urlsToSearch = [
+      `https://graph.microsoft.com/v1.0/users/${mailbox}/messages?${filterParam}`,
+      ...foldersToClean.map(f => `https://graph.microsoft.com/v1.0/users/${mailbox}/mailFolders/${f}/messages?${filterParam}`)
+    ]
+    
+    const allIds = new Set()
+    for (const searchUrl of urlsToSearch) {
+      let url = searchUrl
+      while (url) {
+        try {
+          const data = await withRetry(async () => {
+            const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+            if (!r.ok) { console.warn('[cleaner] folder search', r.status); return { value: [] } }
+            return r.json()
+          }, 'fetch-folder')
+          ;(data.value || []).forEach(m => allIds.add(m.id))
+          url = data['@odata.nextLink'] || null
+        } catch { url = null }
+      }
+    }
+    console.log(`[cleaner] Found ${allIds.size} emails from ${senderEmail} across all folders`)
 
-    while (url) {
-      const data = await withRetry(async () => {
-        const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
-        if (!r.ok) throw new Error(`Graph ${r.status}`)
-        return r.json()
-      }, 'fetch-batch')
+    const ids = [...allIds]
+    // Fake the while loop structure expected below
+    let url = null
+    {
+      const data = { value: ids.map(id => ({ id })) }
+      while (true) {
 
       const ids = (data.value || []).map(m => m.id)
       if (ids.length === 0) break
@@ -356,7 +381,9 @@ router.post('/cleaner/delete-sender', async (req, res) => {
         await new Promise(r => setTimeout(r, 100))
       }
 
-      url = data['@odata.nextLink'] ?? null
+      url = null // processed all
+      break
+    }
     }
 
     // Persist deletion record so it doesn't reappear after restart
