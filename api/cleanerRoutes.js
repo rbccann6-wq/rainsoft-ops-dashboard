@@ -104,31 +104,72 @@ function isSafe(senderEmail) {
   return false
 }
 
-// ─── Scan cache (persisted to disk so it survives server restarts) ────────────
+// ─── Supabase-backed persistence (survives Render restarts) ─────────────────
+import { createClient } from '@supabase/supabase-js'
 
-import fs from 'fs'
-import path from 'path'
-import { fileURLToPath } from 'url'
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const SCAN_CACHE_PATH = path.join(__dirname, '..', 'data', 'scan-cache.json')
-
-function loadScanCache() {
-  try {
-    if (fs.existsSync(SCAN_CACHE_PATH)) {
-      return JSON.parse(fs.readFileSync(SCAN_CACHE_PATH, 'utf8'))
-    }
-  } catch { /* ignore */ }
-  return null
+function getSB() {
+  return createClient(
+    process.env.SUPABASE_URL || 'https://njqavagyuwdmkeyoscbz.supabase.co',
+    process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5qcWF2YWd5dXdkbWtleW9zY2J6Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Mzc1NTM4MywiZXhwIjoyMDg5MzMxMzgzfQ.67pxlJAlqIKgTgDwpoDBcQZ12ezT3ZPbQRXsBnRptPs'
+  )
 }
 
-function saveScanCache(state) {
+function loadScanCache() { return null }  // stub — Supabase loaded async on status poll
+
+async function saveScanCache(state) {
+  // Save sender list to Supabase for persistence across restarts
   try {
-    fs.mkdirSync(path.dirname(SCAN_CACHE_PATH), { recursive: true })
-    fs.writeFileSync(SCAN_CACHE_PATH, JSON.stringify(state))
+    const sb = getSB()
+    // Upsert each sender
+    for (const sender of (state.senders || [])) {
+      await sb.from('sender_scan_cache').upsert({
+        sender_email: sender.email,
+        sender_name: sender.name,
+        domain: sender.domain,
+        email_count: sender.count,
+        is_safe: sender.safe,
+        samples: sender.samples,
+        scanned_at: new Date().toISOString(),
+      }, { onConflict: 'sender_email' })
+    }
   } catch (err) {
-    console.warn('Could not save scan cache:', err.message)
+    console.warn('saveScanCache error:', err.message)
   }
+}
+
+async function loadScanCacheFromDB() {
+  try {
+    const sb = getSB()
+    const { data } = await sb.from('sender_scan_cache').select('*').order('email_count', { ascending: false })
+    if (!data || data.length === 0) return null
+    return {
+      status: 'done',
+      startedAt: data[0]?.scanned_at || null,
+      finishedAt: data[0]?.scanned_at || null,
+      pagesScanned: 0,
+      totalScanned: data.reduce((s, r) => s + (r.email_count || 0), 0),
+      error: null,
+      senders: data.map(r => ({
+        name: r.sender_name, email: r.sender_email, domain: r.domain,
+        count: r.email_count, safe: r.is_safe, samples: r.samples || [],
+      }))
+    }
+  } catch { return null }
+}
+
+async function isDeleted(senderEmail) {
+  try {
+    const { data } = await getSB().from('deleted_senders').select('id').eq('sender_email', senderEmail.toLowerCase()).single()
+    return !!data
+  } catch { return false }
+}
+
+async function markDeleted(senderEmail, count) {
+  try {
+    await getSB().from('deleted_senders').upsert({
+      sender_email: senderEmail.toLowerCase(), deleted_count: count, deleted_at: new Date().toISOString()
+    }, { onConflict: 'sender_email' })
+  } catch {}
 }
 
 // ─── Background scan state (in-memory, survives the request lifecycle) ────────
@@ -226,7 +267,15 @@ router.post('/cleaner/scan/start', (req, res) => {
 
 // ─── GET /api/cleaner/scan/status — poll progress ────────────────────────────
 
-router.get('/cleaner/scan/status', (req, res) => {
+router.get('/cleaner/scan/status', async (req, res) => {
+  // If server just restarted and has no scan data, try loading from Supabase
+  if (scanState.status === 'idle') {
+    const dbCache = await loadScanCacheFromDB()
+    if (dbCache) {
+      scanState = dbCache
+      console.log('[cleaner] Restored scan cache from Supabase:', dbCache.senders.length, 'senders')
+    }
+  }
   res.json({
     status: scanState.status,
     pagesScanned: scanState.pagesScanned,
@@ -235,7 +284,6 @@ router.get('/cleaner/scan/status', (req, res) => {
     startedAt: scanState.startedAt,
     finishedAt: scanState.finishedAt,
     error: scanState.error,
-    // Only return full senders list when done to keep response small during scan
     senders: scanState.status === 'done' ? scanState.senders : [],
   })
 })
@@ -246,6 +294,17 @@ router.post('/cleaner/delete-sender', async (req, res) => {
   const { senderEmail } = req.body
   if (!senderEmail) return res.status(400).json({ error: 'senderEmail required' })
   if (isSafe(senderEmail)) return res.status(403).json({ error: 'Refusing to delete emails from safe sender' })
+  // Check Supabase safelist (kept senders)
+  try {
+    const { data } = await getSB().from('email_safelist').select('id').eq('email', senderEmail.toLowerCase()).maybeSingle()
+    if (data) return res.status(403).json({ error: 'Sender is in your Keep list' })
+    // Also check domain
+    const domain = senderEmail.split('@')[1]?.toLowerCase()
+    if (domain) {
+      const { data: domData } = await getSB().from('email_safelist').select('id').eq('domain', domain).maybeSingle()
+      if (domData) return res.status(403).json({ error: 'Sender domain is in your Keep list' })
+    }
+  } catch {}
 
   try {
     const token = await withRetry(getToken, 'token')
@@ -300,6 +359,10 @@ router.post('/cleaner/delete-sender', async (req, res) => {
       url = data['@odata.nextLink'] ?? null
     }
 
+    // Persist deletion record so it doesn't reappear after restart
+    if (deleted > 0) {
+      await markDeleted(senderEmail, deleted)
+    }
     res.json({ deleted, failed })
   } catch (err) {
     console.error('POST /api/cleaner/delete-sender:', err.message)
