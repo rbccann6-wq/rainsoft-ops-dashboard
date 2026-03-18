@@ -83,7 +83,9 @@ export function LeadsPanel() {
     }
   }, [checkForNewLeads])
 
-  const pendingCount = imeLeads.filter(l => !contacted.has(l.woId)).length
+  // Only show leads not yet in Salesforce — once synced they move to All Leads tab
+  const pendingLeads = imeLeads.filter(l => !l.sfLeadId)
+  const pendingCount = pendingLeads.filter(l => !contacted.has(l.woId)).length
 
   async function handleExportOne(lead: ImeLead) {
     setExportStates(s => ({ ...s, [lead.woId]: 'exporting' }))
@@ -209,7 +211,7 @@ export function LeadsPanel() {
             {tab === 'lowes' ? "Lowe's (IME)" : 'SmartMail Cards'}
             {tab === 'lowes' && imeLeads.length > 0 && (
               <span className="ml-2 text-xs bg-blue-900/50 text-blue-300 px-1.5 py-0.5 rounded-full">
-                {imeLeads.length}
+                {pendingLeads.length}
               </span>
             )}
             {tab === 'smartmail' && smartBatches.length > 0 && (
@@ -232,10 +234,10 @@ export function LeadsPanel() {
       {/* Lowe's IME Leads */}
       {!loading && activeTab === 'lowes' && (
         <div className="space-y-3">
-          {imeLeads.length === 0 && !error && (
-            <p className="text-sm text-slate-500 py-8 text-center">No pending Lowe's leads.</p>
+          {pendingLeads.length === 0 && !error && (
+            <p className="text-sm text-slate-500 py-8 text-center">No pending Lowe's leads — all synced to Salesforce. View them in the <strong className="text-slate-300">All Leads</strong> tab.</p>
           )}
-          {imeLeads.map(lead => {
+          {pendingLeads.map(lead => {
             const exportState = exportStates[lead.woId] ?? 'idle'
             return (
               <Card key={lead.woId} className={cn(contacted.has(lead.woId) && 'opacity-60')}>
