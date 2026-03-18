@@ -566,13 +566,24 @@ router.get('/smartmail-leads', async (req, res) => {
       e.from?.emailAddress?.address?.toLowerCase().includes('smartmail')
     )
 
-    // Return email metadata — OCR processing happens on demand
-    const result = emails.map(e => ({
-      emailId: e.id,
-      subject: e.subject,
-      date: e.receivedDateTime,
-      status: 'pdf_ready', // OCR not yet run
-    }))
+    // Check which batches have already been processed in Supabase
+    const sb = getSB()
+    const emailIds = emails.map(e => e.id)
+    const { data: processed } = await sb
+      .from('smartmail_leads')
+      .select('batch_id')
+      .in('batch_id', emailIds)
+    const processedIds = new Set((processed || []).map(r => r.batch_id))
+
+    // Only return batches not yet processed
+    const result = emails
+      .filter(e => !processedIds.has(e.id))
+      .map(e => ({
+        emailId: e.id,
+        subject: e.subject,
+        date: e.receivedDateTime,
+        status: 'pdf_ready',
+      }))
 
     res.json({ batches: result })
   } catch (err) {
