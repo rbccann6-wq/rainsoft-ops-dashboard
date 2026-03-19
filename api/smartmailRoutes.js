@@ -159,11 +159,41 @@ async function checkEmailDomain(email) {
   }
 }
 
+/** Brave Search phone cross-check — searches name+address, extracts any phone numbers found */
+async function bravePhoneLookup(name, address, city, state) {
+  try {
+    const BRAVE_KEY = process.env.BRAVE_API_KEY || 'BSA3VL7tgNknVMsSkZM7Qjhz9Qj0nIq'
+    const query = `"${name}" "${city} ${state}" phone`
+    const r = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`, {
+      headers: { 'Accept': 'application/json', 'X-Subscription-Token': BRAVE_KEY }
+    })
+    if (!r.ok) return { found: [], match: null }
+    const data = await r.json()
+
+    // Extract all phone numbers from snippets + titles
+    const text = JSON.stringify(data.web?.results || [])
+    const phoneMatches = [...text.matchAll(/\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}/g)]
+      .map(m => m[0].replace(/\D/g, ''))
+      .filter(p => p.length === 10)
+
+    const unique = [...new Set(phoneMatches)]
+    return { found: unique, match: null } // match compared after
+  } catch {
+    return { found: [], match: null }
+  }
+}
+
 async function verify(lead, printedName, printedAddr) {
   const name_match = checkNameMatch(lead.full_name, printedName)
   const addr_match = checkAddrMatch(lead.address, printedAddr)
   const { phone_valid, area_code_match } = checkPhone(lead.phone, lead.state)
   const email_valid = await checkEmailDomain(lead.email)
+
+  // Brave phone cross-check
+  const parsedDigits = (lead.phone || '').replace(/\D/g, '')
+  const brave = await bravePhoneLookup(lead.full_name, lead.address, lead.city, lead.state)
+  const brave_phone_match = brave.found.length > 0 ? brave.found.includes(parsedDigits) : null
+  const brave_phones_found = brave.found
 
   const checks = [name_match, addr_match, phone_valid, area_code_match, email_valid].filter(v => v !== null)
   const passed = checks.filter(Boolean).length
@@ -174,7 +204,7 @@ async function verify(lead, printedName, printedAddr) {
   else if (passed >= 3) confidence = 'Medium'
   else if (passed >= 2) confidence = 'Low'
 
-  return { name_match, addr_match, phone_valid, area_code_match, email_valid, confidence, score: `${passed}/${total}` }
+  return { name_match, addr_match, phone_valid, area_code_match, email_valid, brave_phone_match, brave_phones_found, confidence, score: `${passed}/${total}` }
 }
 
 // ── PDF → images using Python ─────────────────────────────────────────────────
