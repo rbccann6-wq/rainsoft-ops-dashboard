@@ -236,3 +236,18 @@ CREATE TABLE IF NOT EXISTS migration_log (
 CREATE INDEX IF NOT EXISTS idx_sf_accounts_sf_id ON sf_accounts(sf_id);
 CREATE INDEX IF NOT EXISTS idx_sf_accounts_last_name ON sf_accounts(last_name);
 CREATE INDEX IF NOT EXISTS idx_sf_accounts_phone ON sf_accounts(phone);
+
+-- Finance email watcher log
+CREATE TABLE IF NOT EXISTS finance_email_log (
+  id              SERIAL PRIMARY KEY,
+  email_id        TEXT UNIQUE NOT NULL,
+  from_domain     TEXT,
+  subject         TEXT,
+  customer_name   TEXT,
+  sf_lead_id      TEXT,
+  approval_status TEXT,  -- approved | declined | unknown
+  amount          NUMERIC,
+  pdfs_attached   JSONB DEFAULT '[]',
+  processed_at    TIMESTAMPTZ DEFAULT NOW(),
+  error           TEXT
+);

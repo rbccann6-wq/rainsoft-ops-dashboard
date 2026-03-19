@@ -56,6 +56,23 @@ async function sfQuery(soql) {
   return r.json()
 }
 
+/** Detect if email indicates an approval/funding decision */
+function detectApproval(subject, bodyPreview) {
+  const text = `${subject} ${bodyPreview}`.toLowerCase()
+  const approvalKeywords = ['approved', 'approval', 'funded', 'funding', 'congratulations', 'decision: approved', 'credit approved', 'application approved']
+  const declineKeywords = ['declined', 'denied', 'not approved', 'unable to approve']
+  if (declineKeywords.some(k => text.includes(k))) return 'declined'
+  if (approvalKeywords.some(k => text.includes(k))) return 'approved'
+  return 'unknown'
+}
+
+/** Extract finance amount from subject/body */
+function extractAmount(subject, bodyPreview) {
+  const text = `${subject} ${bodyPreview}`
+  const m = text.match(/\$\s?([\d,]+(?:\.\d{2})?)/);
+  return m ? parseFloat(m[1].replace(',', '')) : null
+}
+
 /** Extract customer name from email subject/body — looks for common patterns */
 function extractCustomerName(subject, bodyPreview) {
   const text = `${subject} ${bodyPreview}`
@@ -188,7 +205,13 @@ router.get('/finance-emails', async (req, res) => {
           errors: []
         }
 
-        // Attach each PDF to SF lead
+        // Detect approval status + amount
+        const approvalStatus = detectApproval(email.subject, email.bodyPreview || '')
+        const amount = extractAmount(email.subject, email.bodyPreview || '')
+        emailResult.approvalStatus = approvalStatus
+        emailResult.amount = amount
+
+        // Attach each PDF to SF lead + update notes
         if (lead) {
           for (const pdf of pdfs) {
             try {
@@ -197,6 +220,33 @@ router.get('/finance-emails', async (req, res) => {
             } catch (err) {
               emailResult.errors.push(`${pdf.name}: ${err.message}`)
             }
+          }
+
+          // Update SF lead notes with finance status
+          try {
+            const sfToken = await getSfToken()
+            const noteAppend = [
+              `\n--- FINANCE UPDATE ${new Date().toLocaleDateString()} ---`,
+              `Company: ${domain.split('.')[0].toUpperCase()}`,
+              approvalStatus === 'approved' ? '✓ APPROVED' : approvalStatus === 'declined' ? '✗ DECLINED' : 'Decision pending',
+              amount ? `Amount: $${amount.toLocaleString()}` : null,
+              emailResult.pdfsAttached.length ? `PDF: ${emailResult.pdfsAttached.join(', ')}` : null,
+            ].filter(Boolean).join(' | ')
+
+            // Get current notes
+            const leadR = await fetch(`${SF_INSTANCE}/services/data/v59.0/sobjects/Lead/${lead.Id}?fields=Important_Details_Notes__c`, {
+              headers: { Authorization: `Bearer ${sfToken}` }
+            })
+            const leadData = await leadR.json()
+            const currentNotes = leadData.Important_Details_Notes__c || ''
+
+            await fetch(`${SF_INSTANCE}/services/data/v59.0/sobjects/Lead/${lead.Id}`, {
+              method: 'PATCH',
+              headers: { Authorization: `Bearer ${sfToken}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ Important_Details_Notes__c: currentNotes + noteAppend })
+            })
+          } catch (err) {
+            emailResult.errors.push(`Notes update: ${err.message}`)
           }
         }
 
