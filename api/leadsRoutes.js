@@ -494,7 +494,7 @@ async function syncLeadsToSalesforce(leads) {
         LastName: lastName,
         LeadSource: 'Lowes',
         Lead_Source_Specific__c: 'Lowes',
-        Gift__c: 'Other',
+        Gift__c: '$20 Lowes GC',
         Phone: lead.phone || '',
         Email: lead.email || '',
         Status: 'New',
@@ -510,6 +510,9 @@ async function syncLeadsToSalesforce(leads) {
           lead.rentcast?.yearBuilt    ? `Built ${lead.rentcast.yearBuilt}` : null,
         ].filter(Boolean).join(' | '),
         CountryCode: 'US',
+        // Property fields from Rentcast
+        ...(lead.rentcast?.price        ? { Home_Value__c: lead.rentcast.price } : {}),
+        ...(lead.rentcast?.ownerOccupied === true ? { Homeowner__c: 'Yes', Homeowner_Verified__c: true } : {}),
       }
 
       if (addrMatch) {
