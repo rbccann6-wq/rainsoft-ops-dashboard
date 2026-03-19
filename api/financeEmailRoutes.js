@@ -97,8 +97,8 @@ function extractCustomerName(subject, bodyPreview) {
   return null
 }
 
-/** Find SF lead by customer name */
-async function findSfLead(customerName) {
+/** Find SF Contact (converted customer) by name — also returns AccountId */
+async function findSfContact(customerName) {
   if (!customerName) return null
   const parts = customerName.trim().split(' ')
   const firstName = parts[0]
@@ -106,15 +106,24 @@ async function findSfLead(customerName) {
   if (!lastName) return null
 
   try {
+    // Search Contact by first + last name
     const result = await sfQuery(
-      `SELECT Id, FirstName, LastName FROM Lead WHERE FirstName = '${firstName.replace(/'/g,"\\'")}' AND LastName = '${lastName.replace(/'/g,"\\'")}' ORDER BY CreatedDate DESC LIMIT 1`
+      `SELECT Id, FirstName, LastName, AccountId FROM Contact WHERE FirstName = '${firstName.replace(/'/g,"\\'")}' AND LastName = '${lastName.replace(/'/g,"\\'")}' ORDER BY CreatedDate DESC LIMIT 1`
     )
-    return result.totalSize > 0 ? result.records[0] : null
+    if (result.totalSize > 0) return result.records[0]
+
+    // Fallback: search Account by name (person accounts have full name)
+    const result2 = await sfQuery(
+      `SELECT Id, Name FROM Account WHERE Name LIKE '%${lastName.replace(/'/g,"\\'")}%' ORDER BY CreatedDate DESC LIMIT 1`
+    )
+    if (result2.totalSize > 0) return { Id: result2.records[0].Id, AccountId: result2.records[0].Id, _type: 'account' }
+
+    return null
   } catch { return null }
 }
 
 /** Attach PDF to SF lead as ContentDocument */
-async function attachPdfToLead(leadId, filename, pdfBase64) {
+async function attachPdfToLead(contactId, filename, pdfBase64) {
   const token = await getSfToken()
 
   // 1. Create ContentVersion
@@ -122,7 +131,7 @@ async function attachPdfToLead(leadId, filename, pdfBase64) {
     Title: filename.replace('.pdf', ''),
     PathOnClient: filename,
     VersionData: pdfBase64,
-    FirstPublishLocationId: leadId,
+    FirstPublishLocationId: contactId,
   }
   const cvR = await fetch(`${SF_INSTANCE}/services/data/v59.0/sobjects/ContentVersion`, {
     method: 'POST',
@@ -191,7 +200,7 @@ router.get('/finance-emails', async (req, res) => {
         const customerName = extractCustomerName(email.subject, email.bodyPreview || '')
 
         // Find SF lead
-        const lead = await findSfLead(customerName)
+        const lead = await findSfContact(customerName)
 
         const emailResult = {
           emailId: email.id,
@@ -199,8 +208,8 @@ router.get('/finance-emails', async (req, res) => {
           from: email.from?.emailAddress?.address,
           date: email.receivedDateTime,
           customerName,
-          leadFound: !!lead,
-          leadId: lead?.Id || null,
+          contactFound: !!lead,
+          contactId: lead?.Id || null,
           pdfsAttached: [],
           errors: []
         }
@@ -215,7 +224,7 @@ router.get('/finance-emails', async (req, res) => {
         if (lead) {
           for (const pdf of pdfs) {
             try {
-              await attachPdfToLead(lead.Id, pdf.name, pdf.contentBytes)
+              await attachPdfToLead(lead.AccountId || lead.Id, pdf.name, pdf.contentBytes)
               emailResult.pdfsAttached.push(pdf.name)
             } catch (err) {
               emailResult.errors.push(`${pdf.name}: ${err.message}`)
@@ -234,13 +243,14 @@ router.get('/finance-emails', async (req, res) => {
             ].filter(Boolean).join(' | ')
 
             // Get current notes
-            const leadR = await fetch(`${SF_INSTANCE}/services/data/v59.0/sobjects/Lead/${lead.Id}?fields=Important_Details_Notes__c`, {
+            const targetId = lead.AccountId || lead.Id
+            const leadR = await fetch(`${SF_INSTANCE}/services/data/v59.0/sobjects/Account/${targetId}?fields=Important_Details_Notes__c`, {
               headers: { Authorization: `Bearer ${sfToken}` }
             })
             const leadData = await leadR.json()
             const currentNotes = leadData.Important_Details_Notes__c || ''
 
-            await fetch(`${SF_INSTANCE}/services/data/v59.0/sobjects/Lead/${lead.Id}`, {
+            await fetch(`${SF_INSTANCE}/services/data/v59.0/sobjects/Account/${targetId}`, {
               method: 'PATCH',
               headers: { Authorization: `Bearer ${sfToken}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({ Important_Details_Notes__c: currentNotes + noteAppend })
@@ -257,7 +267,7 @@ router.get('/finance-emails', async (req, res) => {
             from_domain: domain,
             subject: email.subject,
             customer_name: customerName,
-            sf_lead_id: lead?.Id || null,
+            sf_contact_id: lead?.Id || null,
             pdfs_attached: emailResult.pdfsAttached,
             processed_at: new Date().toISOString(),
             error: emailResult.errors.join('; ') || null
