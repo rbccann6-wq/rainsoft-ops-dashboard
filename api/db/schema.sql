@@ -237,6 +237,91 @@ CREATE INDEX IF NOT EXISTS idx_sf_accounts_sf_id ON sf_accounts(sf_id);
 CREATE INDEX IF NOT EXISTS idx_sf_accounts_last_name ON sf_accounts(last_name);
 CREATE INDEX IF NOT EXISTS idx_sf_accounts_phone ON sf_accounts(phone);
 
+-- ─── Pentair Orders & Inventory ───────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS pentair_orders (
+  id                SERIAL PRIMARY KEY,
+  order_number      TEXT UNIQUE NOT NULL,
+  order_date        DATE,
+  desired_ship_date DATE,
+  status            TEXT DEFAULT 'ordered',
+  customer_name     TEXT,
+  notes             TEXT,
+  created_at        TIMESTAMPTZ DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS pentair_order_items (
+  id                SERIAL PRIMARY KEY,
+  order_id          INTEGER REFERENCES pentair_orders(id),
+  part_id           TEXT NOT NULL,
+  description       TEXT,
+  quantity_ordered  INTEGER,
+  quantity_shipped  INTEGER DEFAULT 0,
+  unit_price        NUMERIC(12,2),
+  line_total        NUMERIC(12,2),
+  created_at        TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS pentair_shipments (
+  id                SERIAL PRIMARY KEY,
+  order_id          INTEGER REFERENCES pentair_orders(id),
+  packlist_number   TEXT,
+  tracking_number   TEXT,
+  carrier           TEXT,
+  ship_date         DATE,
+  email_id          TEXT,
+  created_at        TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS pentair_invoices (
+  id                  SERIAL PRIMARY KEY,
+  invoice_number      TEXT UNIQUE NOT NULL,
+  order_id            INTEGER REFERENCES pentair_orders(id),
+  sales_order         TEXT,
+  invoice_date        DATE,
+  due_date            DATE,
+  subtotal            NUMERIC(12,2),
+  freight             NUMERIC(12,2) DEFAULT 0,
+  tax                 NUMERIC(12,2) DEFAULT 0,
+  total_due           NUMERIC(12,2),
+  discount_2pct       NUMERIC(12,2),
+  net_after_discount  NUMERIC(12,2),
+  payment_terms       TEXT DEFAULT '2% 10 days, Net 30',
+  is_credit           BOOLEAN DEFAULT false,
+  is_warranty         BOOLEAN DEFAULT false,
+  email_id            TEXT,
+  pdf_content         BYTEA,
+  created_at          TIMESTAMPTZ DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS pentair_payments (
+  id              SERIAL PRIMARY KEY,
+  invoice_id      INTEGER REFERENCES pentair_invoices(id),
+  order_id        INTEGER REFERENCES pentair_orders(id),
+  sales_order     TEXT,
+  amount          NUMERIC(12,2),
+  payment_date    DATE,
+  creation_date   DATE,
+  status          TEXT DEFAULT 'initiated',
+  is_bulk         BOOLEAN DEFAULT false,
+  memo            TEXT,
+  email_id        TEXT,
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_pentair_orders_order_number ON pentair_orders(order_number);
+CREATE INDEX IF NOT EXISTS idx_pentair_orders_status ON pentair_orders(status);
+CREATE INDEX IF NOT EXISTS idx_pentair_orders_order_date ON pentair_orders(order_date);
+CREATE INDEX IF NOT EXISTS idx_pentair_order_items_order_id ON pentair_order_items(order_id);
+CREATE INDEX IF NOT EXISTS idx_pentair_shipments_order_id ON pentair_shipments(order_id);
+CREATE INDEX IF NOT EXISTS idx_pentair_invoices_order_id ON pentair_invoices(order_id);
+CREATE INDEX IF NOT EXISTS idx_pentair_invoices_sales_order ON pentair_invoices(sales_order);
+CREATE INDEX IF NOT EXISTS idx_pentair_payments_invoice_id ON pentair_payments(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_pentair_payments_sales_order ON pentair_payments(sales_order);
+
 -- Finance email watcher log
 CREATE TABLE IF NOT EXISTS finance_email_log (
   id              SERIAL PRIMARY KEY,

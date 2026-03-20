@@ -16,6 +16,7 @@ import financeAgentRoutes from './api/financeAgentRoutes.js'
 import emailPollerRoutes, { startPoller } from './api/emailPollerRoutes.js'
 import smartmailRoutes from './api/smartmailRoutes.js'
 import financeEmailRoutes from './api/financeEmailRoutes.js'
+import pentairRoutes, { startPentairPoller } from './api/pentairRoutes.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -40,6 +41,7 @@ app.use('/api', financeAgentRoutes)
 app.use('/api', emailPollerRoutes)
 app.use('/api', smartmailRoutes)
 app.use('/api', financeEmailRoutes)
+app.use('/api', pentairRoutes)
 
 // Serve built React app
 app.use(express.static(join(__dirname, 'dist')))
@@ -54,6 +56,9 @@ app.listen(PORT, async () => {
 
   // Start delta poller for FastField emails (replaces webhook — works through Cloudflare)
   startPoller()
+
+  // Start Pentair email poller (orders, invoices, payments)
+  startPentairPoller()
 
   // Nightly purge of temp PDF copies (originals stay in M365 inbox)
   try {

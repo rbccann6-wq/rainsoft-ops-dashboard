@@ -12,6 +12,7 @@ import { EmailCleaner } from '@/components/cleaner/EmailCleaner'
 import { CostMonitor } from '@/components/agents/CostMonitor'
 import { FinanceDashboard } from '@/components/finance/FinanceDashboard'
 import { AllLeadsPage } from '@/pages/AllLeadsPage'
+import { PentairOrdersPage } from '@/pages/PentairOrdersPage'
 import { mockQuickStats } from '@/data/mock'
 
 export default function App() {
@@ -34,6 +35,7 @@ export default function App() {
               <Route path="/costs" element={<CostMonitor />} />
               <Route path="/finance" element={<FinanceDashboard />} />
               <Route path="/all-leads" element={<AllLeadsPage />} />
+              <Route path="/orders" element={<PentairOrdersPage />} />
             </Routes>
           </main>
         </div>
