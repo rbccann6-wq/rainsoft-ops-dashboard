@@ -689,23 +689,32 @@ async function pollOnce() {
 
 // ── Search-based backfill (no delta, searches last 90 days) ──────────────────
 
-async function backfillFromSearch(token, mailbox, senderEmail, maxResults = 200) {
+async function backfillFromSearch(token, mailbox, senderEmail, since = null, maxResults = 500) {
   const messages = []
-  let url = `${BASE}/users/${mailbox}/messages?$search="from:${senderEmail}"&$top=50&$select=id,subject,from,hasAttachments,receivedDateTime&$orderby=receivedDateTime+desc`
+  // Graph $search does not combine with $orderby — use search only, paginate
+  let url = `https://graph.microsoft.com/v1.0/users/${mailbox}/messages?$search="from:${senderEmail}"&$top=50&$select=id,subject,from,hasAttachments,receivedDateTime`
 
   let pages = 0
-  while (url && messages.length < maxResults && pages < 4) {
+  while (url && messages.length < maxResults && pages < 10) {
     const r = await fetch(url, {
       headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: 'eventual' }
     })
-    if (!r.ok) break
+    if (!r.ok) {
+      const errText = await r.text().catch(() => '')
+      console.error(`[pentair] backfill search failed for ${senderEmail}: ${r.status} ${errText.slice(0,200)}`)
+      break
+    }
     const data = await r.json()
-    const filtered = (data.value || []).filter(m =>
-      m.from?.emailAddress?.address?.toLowerCase() === senderEmail.toLowerCase()
-    )
+    const filtered = (data.value || []).filter(m => {
+      const addr = m.from?.emailAddress?.address?.toLowerCase()
+      if (addr !== senderEmail.toLowerCase()) return false
+      if (since && m.receivedDateTime < since) return false
+      return true
+    })
     messages.push(...filtered)
     url = data['@odata.nextLink'] || null
     pages++
+    console.log(`[pentair] backfill ${senderEmail}: page ${pages}, ${messages.length} msgs so far`)
   }
   return messages
 }
@@ -932,32 +941,41 @@ router.post('/pentair/backfill', async (req, res) => {
     const mailbox = process.env.MAILBOX_EMAIL
     if (!mailbox) return res.status(500).json({ error: 'MAILBOX_EMAIL not configured' })
 
+    const since = req.body?.since || '2025-01-01T00:00:00Z'
+    console.log(`[pentair] Starting backfill since ${since}`)
+
     const token    = await getToken()
     const processed = loadProcessed()
     const senders  = [PENTAIR_CS, PENTAIR_AR, EBILL_EXPRESS]
 
     let total = 0
+    const errors = []
     const results = {}
 
     for (const sender of senders) {
-      const messages = await backfillFromSearch(token, mailbox, sender)
+      console.log(`[pentair] Backfilling ${sender}...`)
+      const messages = await backfillFromSearch(token, mailbox, sender, since, 500)
       const newMsgs  = messages.filter(m => !processed.has(m.id))
       results[sender] = { found: messages.length, new: newMsgs.length }
+      console.log(`[pentair] ${sender}: ${messages.length} found, ${newMsgs.length} new`)
 
       for (const msg of newMsgs) {
         processed.add(msg.id)
-        saveProcessed(processed)
         try {
           await processPentairEmail(token, mailbox, msg)
           total++
         } catch (err) {
-          console.error('[pentair] Backfill error:', msg.id, err.message)
+          console.error('[pentair] Backfill error:', msg.subject, err.message)
+          errors.push({ subject: msg.subject, error: err.message })
         }
       }
+      saveProcessed(processed)
     }
 
-    res.json({ ok: true, processed: total, breakdown: results })
+    console.log(`[pentair] Backfill complete: ${total} processed`)
+    res.json({ ok: true, processed: total, breakdown: results, errors: errors.slice(0, 20) })
   } catch (err) {
+    console.error('[pentair] Backfill failed:', err.message)
     res.status(500).json({ ok: false, error: err.message })
   }
 })
