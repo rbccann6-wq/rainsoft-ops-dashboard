@@ -959,14 +959,25 @@ router.post('/pentair/backfill', async (req, res) => {
       results[sender] = { found: messages.length, new: newMsgs.length }
       console.log(`[pentair] ${sender}: ${messages.length} found, ${newMsgs.length} new`)
 
-      for (const msg of newMsgs) {
+      for (let i = 0; i < newMsgs.length; i++) {
+        const msg = newMsgs[i]
         processed.add(msg.id)
         try {
           await processPentairEmail(token, mailbox, msg)
           total++
+          // Rate-limit: pause briefly every message to avoid overwhelming free-tier DB
+          if (i % 5 === 4) {
+            await new Promise(r => setTimeout(r, 2000))
+            saveProcessed(processed)
+          }
         } catch (err) {
           console.error('[pentair] Backfill error:', msg.subject, err.message)
           errors.push({ subject: msg.subject, error: err.message })
+          // On connection error, pause longer
+          if (err.message.includes('Connection terminated') || err.message.includes('ECONNRESET')) {
+            console.log('[pentair] DB connection issue, pausing 5s...')
+            await new Promise(r => setTimeout(r, 5000))
+          }
         }
       }
       saveProcessed(processed)
