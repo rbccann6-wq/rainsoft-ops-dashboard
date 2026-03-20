@@ -13,6 +13,15 @@ function getSB() {
 
 const router = express.Router()
 
+// Normalize US phone to (XXX) XXX-XXXX display format
+function normalizePhone(raw) {
+  if (!raw) return ''
+  const digits = raw.replace(/\D/g, '')
+  if (digits.length === 10) return `(${digits.slice(0,3)}) ${digits.slice(3,6)}-${digits.slice(6)}`
+  if (digits.length === 11 && digits.startsWith('1')) return `(${digits.slice(1,4)}) ${digits.slice(4,7)}-${digits.slice(7)}`
+  return raw.trim()
+}
+
 // ─── M365 auth (reuse pattern from emailRoutes) ───────────────────────────────
 
 let _msalClient = null
@@ -154,8 +163,8 @@ async function fetchWorkOrder(woId) {
 
     // Extract customer info
     const nameMatch = text.match(/(\d{8})\s+([A-Za-z]+\s+[A-Za-z]+)\s+Appt/)
-    const cellMatch = text.match(/C:\s*\(?([\d\s\-\(\)]+)\)?(?=\s*O:|[A-Za-z])/)
-    const officeMatch = text.match(/O:\s*\(?([\d\s\-\(\)]+)\)?(?=\s*[a-z@])/)
+    const cellMatch = text.match(/C:\s*([\(\d][\d\s\-\(\)]{7,}[\d])(?=\s*O:|[A-Za-z])/)
+    const officeMatch = text.match(/O:\s*([\(\d][\d\s\-\(\)]{7,}[\d])(?=\s*[a-z@])/)
     const emailMatch = text.match(/([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/)
     const addrMatch = text.match(/Project Address\s+([\d][^C]+?)(?:Cancel|Add Billing|Special)/)
     const storeMatch = text.match(/Store\s+([\d]+\s+[^\n]+?(?:FL|AL|GA|TN|MS)(?:\s*\(\d+\))?)/)
@@ -164,8 +173,8 @@ async function fetchWorkOrder(woId) {
     return {
       woId,
       customerName: nameMatch ? nameMatch[2].trim() : 'Unknown',
-      phone: cellMatch ? cellMatch[1].trim() : '',
-      officePhone: officeMatch ? officeMatch[1].trim() : '',
+      phone: normalizePhone(cellMatch ? cellMatch[1] : ''),
+      officePhone: normalizePhone(officeMatch ? officeMatch[1] : ''),
       email: emailMatch ? emailMatch[1] : '',
       address: addrMatch ? addrMatch[1].replace(/\s+/g, ' ').replace(/function\s+\w+\(.*$/s, '').trim() : '',
       store: storeMatch ? storeMatch[1].trim() : '',
