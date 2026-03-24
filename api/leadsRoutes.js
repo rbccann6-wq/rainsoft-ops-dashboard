@@ -159,12 +159,25 @@ async function fetchWorkOrder(woId) {
     }
 
     const html = resp.body
-    const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
+    // Decode &nbsp; and other HTML entities BEFORE stripping tags
+    const text = html
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&#160;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
 
     // Extract customer info
-    const nameMatch = text.match(/(\d{8})\s+([A-Za-z]+\s+[A-Za-z]+)\s+Appt/)
-    const cellMatch = text.match(/C:\s*([\(\d][\d\s\-\(\)]{7,}[\d])(?=\s*O:|[A-Za-z])/)
-    const officeMatch = text.match(/O:\s*([\(\d][\d\s\-\(\)]{7,}[\d])(?=\s*[a-z@])/)
+    const nameMatch = text.match(/([A-Za-z]+\s+[A-Za-z]+)\s+Appt\s+Pending/) ||
+                      text.match(/Customer Information\s+([A-Za-z]+\s+[A-Za-z]+)\s/)
+    // Phone: handles C: (xxx) xxx-xxxx or C: xxxxxxxxxx with optional &nbsp; already decoded
+    const cellMatch = text.match(/C:\s*(\(?\d{3}\)?[\s\-\.]\d{3}[\s\-\.]\d{4})/) 
+    const homeMatch = text.match(/H:\s*(\(?\d{3}\)?[\s\-\.]\d{3}[\s\-\.]\d{4})/)
+    const officeMatch = text.match(/O:\s*(\(?\d{3}\)?[\s\-\.]\d{3}[\s\-\.]\d{4})/)
+    // Use first available phone: cell > home > office
+    const bestPhone = cellMatch?.[1] || homeMatch?.[1] || officeMatch?.[1] || ''
     const emailMatch = text.match(/([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/)
     const addrMatch = text.match(/Project Address\s+([\d][^C]+?)(?:Cancel|Add Billing|Special)/)
     const storeMatch = text.match(/Store\s+([\d]+\s+[^\n]+?(?:FL|AL|GA|TN|MS)(?:\s*\(\d+\))?)/)
@@ -172,8 +185,8 @@ async function fetchWorkOrder(woId) {
 
     return {
       woId,
-      customerName: nameMatch ? nameMatch[2].trim() : 'Unknown',
-      phone: normalizePhone(cellMatch ? cellMatch[1] : ''),
+      customerName: nameMatch ? nameMatch[1].trim() : 'Unknown',
+      phone: normalizePhone(bestPhone),
       officePhone: normalizePhone(officeMatch ? officeMatch[1] : ''),
       email: emailMatch ? emailMatch[1] : '',
       address: addrMatch ? addrMatch[1].replace(/\s+/g, ' ').replace(/function\s+\w+\(.*$/s, '').trim() : '',
