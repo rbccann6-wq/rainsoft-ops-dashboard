@@ -17,6 +17,7 @@ import emailPollerRoutes, { startPoller } from './api/emailPollerRoutes.js'
 import smartmailRoutes from './api/smartmailRoutes.js'
 import financeEmailRoutes from './api/financeEmailRoutes.js'
 import pentairRoutes, { startPentairPoller } from './api/pentairRoutes.js'
+import unsubscribeRoutes from './api/unsubscribeRoutes.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -42,6 +43,7 @@ app.use('/api', emailPollerRoutes)
 app.use('/api', smartmailRoutes)
 app.use('/api', financeEmailRoutes)
 app.use('/api', pentairRoutes)
+app.use('/api', unsubscribeRoutes)
 
 // Serve built React app
 app.use(express.static(join(__dirname, 'dist')))
