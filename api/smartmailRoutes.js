@@ -543,6 +543,124 @@ router.post('/smartmail/push-to-sf/:batchId', async (req, res) => {
   }
 })
 
+// GET /api/smartmail/pdf/:batchId — serve the raw PDF for a batch
+router.get('/smartmail/pdf/:batchId', async (req, res) => {
+  try {
+    const batchId = decodeURIComponent(req.params.batchId)
+    // Sanitize: take last 8 meaningful chars (excluding ==)
+    const sanitized = batchId.replace(/[^a-zA-Z0-9]/g, '_').slice(-20)
+    const files = fs.readdirSync(DATA_DIR).filter(f => f.endsWith('.pdf'))
+    const match = files.find(f => f.includes(sanitized.slice(-8)) || batchId.includes(f.replace('.pdf','')))
+    // Fallback: just serve the first PDF if only one exists
+    const pdfFile = match || (files.length === 1 ? files[0] : null)
+    if (!pdfFile) return res.status(404).json({ error: 'PDF not found' })
+    const pdfPath = path.join(DATA_DIR, pdfFile)
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `inline; filename="${pdfFile}"`)
+    res.sendFile(pdfPath)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// PATCH /api/smartmail/lead/:id — edit a lead's fields
+router.patch('/smartmail/lead/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id)
+    const allowed = ['full_name','phone','email','address','city','state','zip','homeowner','tds','hd','ph','water_source','water_quality','water_conditions','filtration','buys_bottled_water']
+    const updates = {}
+    for (const k of allowed) {
+      if (req.body[k] !== undefined) updates[k] = req.body[k]
+    }
+    // Recompute phone validation
+    if (updates.phone !== undefined) {
+      const digits = (updates.phone || '').replace(/\D/g,'')
+      updates.phone_valid = digits.length === 10
+      const ac = digits.slice(0,3)
+      const AL_AC = new Set(['205','251','256','334','938'])
+      const FL_AC = new Set(['239','305','321','352','386','407','448','561','689','727','754','772','786','813','850','863','904','941','954'])
+      const { data: existing } = await getSB().from('smartmail_leads').select('state').eq('id',id).single()
+      const state = (existing?.state || updates.state || '').toUpperCase()
+      const codes = state === 'AL' ? AL_AC : state === 'FL' ? FL_AC : null
+      updates.area_code_match = codes ? codes.has(ac) : null
+    }
+    const { data, error } = await getSB().from('smartmail_leads').update(updates).eq('id', id).select().single()
+    if (error) throw error
+    res.json({ ok: true, lead: data })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
+
+// POST /api/smartmail/push-one/:id — approve + push single lead to SF
+router.post('/smartmail/push-one/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id)
+    const sb = getSB()
+    const { data: lead, error } = await sb.from('smartmail_leads').select('*').eq('id', id).single()
+    if (error || !lead) return res.status(404).json({ ok: false, error: 'Lead not found' })
+
+    const sfToken = await getSfToken()
+    const nameParts = (lead.full_name || '').trim().split(' ')
+    const firstName = nameParts[0] || ''
+    const lastName = nameParts.slice(1).join(' ') || firstName
+    const fmt = p => {
+      if (!p) return ''
+      const d = p.replace(/\D/g,'')
+      if (d.length === 10) return `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`
+      return p
+    }
+    const notes = [
+      `SmartMail Bottle Drop | Batch: ${lead.batch_subject}`,
+      lead.property_owner    ? `Record Owner: ${lead.property_owner}` : null,
+      lead.owner_occupied != null ? `Owner-Occupied: ${lead.owner_occupied ? 'Yes' : 'No'}` : null,
+      lead.house_value       ? `Est. Value: $${Number(lead.house_value).toLocaleString()}` : null,
+      lead.last_sale_price   ? `Last Sale: $${Number(lead.last_sale_price).toLocaleString()}${lead.last_sale_date ? ` (${lead.last_sale_date.slice(0,10)})` : ''}` : null,
+      lead.sqft              ? `${lead.sqft.toLocaleString()} sqft` : null,
+      lead.beds              ? `${lead.beds} bed` : null,
+      lead.baths             ? `${lead.baths} bath` : null,
+      lead.year_built        ? `Built ${lead.year_built}` : null,
+    ].filter(Boolean).join(' | ')
+
+    const record = {
+      RecordTypeId: BOTTLE_DROP_RT,
+      FirstName: firstName, LastName: lastName,
+      LeadSource: 'BD', Lead_Source_Specific__c: 'SmartMail', Gift__c: 'No Gift',
+      Phone: fmt(lead.phone), Email: lead.email || '',
+      Status: 'New', Important_Details_Notes__c: notes, CountryCode: 'US',
+    }
+    if (lead.address)   record.Street     = lead.address
+    if (lead.city)      record.City        = lead.city
+    if (lead.state)     record.StateCode   = lead.state
+    if (lead.zip)       record.PostalCode  = lead.zip
+    if (lead.homeowner === 'Yes' || lead.homeowner === 'yes') record.Homeowner__c = 'Yes'
+    if (lead.water_source)      record.Water_Source__c     = lead.water_source
+    if (lead.buys_bottled_water) record.Bottled_Water__c   = lead.buys_bottled_water
+    if (lead.water_quality)     record.Rate_your_water__c  = lead.water_quality
+    if (lead.water_conditions)  record.Water_Conditions__c = lead.water_conditions
+    if (lead.filtration)        record.Water_Filters__c    = lead.filtration
+    if (lead.hd  != null)       record.Hardness_Level__c   = lead.hd
+    if (lead.tds != null)       record.TDS_Level__c        = lead.tds + 100
+    if (lead.sample_date)       record.Bottle_Drop_Sample_Date__c = lead.sample_date
+    if (lead.house_value)       record.House_Value__c      = lead.house_value
+
+    const r = await fetch(`${SF_INSTANCE}/services/data/v59.0/sobjects/Lead`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${sfToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(record),
+    })
+    const result = await r.json()
+    if (!result.success) {
+      console.warn('[smartmail] push-one failed:', JSON.stringify(result))
+      return res.json({ ok: false, error: JSON.stringify(result.errors || result) })
+    }
+    await sb.from('smartmail_leads').update({ status: 'pushed', sf_lead_id: result.id }).eq('id', id)
+    res.json({ ok: true, sf_lead_id: result.id })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
+
 // ── DEBUG: Test pipeline steps ────────────────────────────────────────────────
 router.get('/smartmail/debug', async (req, res) => {
   const results = { anthropic_key: !!process.env.ANTHROPIC_API_KEY }
