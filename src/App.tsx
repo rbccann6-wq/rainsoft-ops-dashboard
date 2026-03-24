@@ -11,6 +11,7 @@ import { BillsTracker } from '@/components/bills/BillsTracker'
 import { EmailCleaner } from '@/components/cleaner/EmailCleaner'
 import { CostMonitor } from '@/components/agents/CostMonitor'
 import { FinanceDashboard } from '@/components/finance/FinanceDashboard'
+import { FinanceDocsTab } from '@/components/finance/FinanceDocsTab'
 import { AllLeadsPage } from '@/pages/AllLeadsPage'
 import { PentairOrdersPage } from '@/pages/PentairOrdersPage'
 import { mockQuickStats } from '@/data/mock'
@@ -34,6 +35,7 @@ export default function App() {
               <Route path="/cleaner" element={<EmailCleaner />} />
               <Route path="/costs" element={<CostMonitor />} />
               <Route path="/finance" element={<FinanceDashboard />} />
+              <Route path="/finance-docs" element={<FinanceDocsTab />} />
               <Route path="/all-leads" element={<AllLeadsPage />} />
               <Route path="/orders" element={<PentairOrdersPage />} />
             </Routes>

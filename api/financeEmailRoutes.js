@@ -289,4 +289,328 @@ router.get('/finance-emails', async (req, res) => {
   }
 })
 
+// ─── Lender domain → display name mapping ─────────────────────────────────────
+
+const LENDER_MAP = {
+  'theispc.com': 'ISPC',
+  'foundationfinance.com': 'Foundation',
+  'synchronybusiness.com': 'Synchrony',
+  'aquafinance.com': 'Aqua',
+}
+
+function lenderFromDomain(domain) {
+  for (const [d, name] of Object.entries(LENDER_MAP)) {
+    if (domain.includes(d)) return name
+  }
+  return domain
+}
+
+// ─── Sanitize SOQL input ───────────────────────────────────────────────────────
+
+function soqlEscape(str) {
+  return (str || '').replace(/'/g, "\\'").replace(/\\/g, '\\\\')
+}
+
+// ─── GET /api/finance-emails/pending — manual review queue ─────────────────────
+
+router.get('/finance-emails/pending', async (req, res) => {
+  try {
+    const token = await getGraphToken()
+    const mailbox = process.env.MAILBOX_EMAIL || 'rebecca@rainsoftse.com'
+    const sb = getSB()
+
+    const pending = []
+
+    for (const domain of FINANCE_DOMAINS) {
+      const qs = new URLSearchParams({
+        '$search': `"${domain}"`,
+        '$top': '10',
+        '$select': 'id,subject,receivedDateTime,from,bodyPreview,hasAttachments',
+        '$orderby': 'receivedDateTime desc'
+      })
+
+      const r = await fetch(`https://graph.microsoft.com/v1.0/users/${mailbox}/messages?${qs}`, {
+        headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: 'eventual' }
+      })
+      if (!r.ok) continue
+      const data = await r.json()
+
+      const emails = (data.value || []).filter(e => {
+        const from = e.from?.emailAddress?.address?.toLowerCase() || ''
+        return from.includes(domain)
+      })
+
+      for (const email of emails) {
+        // Skip if already attached (has sf_contact_id + pdfs_attached)
+        const { data: existing } = await sb.from('finance_email_log')
+          .select('id,sf_contact_id,pdfs_attached')
+          .eq('email_id', email.id)
+          .maybeSingle()
+        if (existing?.sf_contact_id && existing?.pdfs_attached?.length) continue
+
+        if (!email.hasAttachments) continue
+
+        // Fetch attachments
+        const attR = await fetch(
+          `https://graph.microsoft.com/v1.0/users/${mailbox}/messages/${email.id}/attachments?$select=id,name,contentType,size`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        )
+        if (!attR.ok) continue
+        const attData = await attR.json()
+
+        const pdfs = (attData.value || []).filter(a =>
+          a.name?.toLowerCase().endsWith('.pdf') ||
+          a.contentType?.toLowerCase().includes('pdf')
+        ).map(a => ({ name: a.name, attachmentId: a.id, size: a.size }))
+
+        if (!pdfs.length) continue
+
+        const customerName = extractCustomerName(email.subject, email.bodyPreview || '')
+        const approvalStatus = detectApproval(email.subject, email.bodyPreview || '')
+        const amount = extractAmount(email.subject, email.bodyPreview || '')
+
+        // Try to find suggested SF matches (top 3 across Account/Contact/Lead)
+        let suggestedMatches = []
+        if (customerName) {
+          try {
+            suggestedMatches = await searchSfRecords(customerName, 3)
+          } catch { /* non-critical */ }
+        }
+
+        pending.push({
+          emailId: email.id,
+          subject: email.subject,
+          from: email.from?.emailAddress?.address,
+          lender: lenderFromDomain(domain),
+          date: email.receivedDateTime,
+          customerName,
+          amount,
+          approvalStatus,
+          pdfs,
+          suggestedMatches,
+        })
+      }
+    }
+
+    // Sort newest first
+    pending.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+
+    res.json(pending)
+  } catch (err) {
+    console.error('GET /api/finance-emails/pending:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ─── GET /api/finance-emails/pdf/:emailId/:attachmentId — stream PDF ──────────
+
+router.get('/finance-emails/pdf/:emailId/:attachmentId', async (req, res) => {
+  try {
+    const { emailId, attachmentId } = req.params
+    const token = await getGraphToken()
+    const mailbox = process.env.MAILBOX_EMAIL || 'rebecca@rainsoftse.com'
+
+    const attR = await fetch(
+      `https://graph.microsoft.com/v1.0/users/${mailbox}/messages/${encodeURIComponent(emailId)}/attachments/${encodeURIComponent(attachmentId)}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    )
+    if (!attR.ok) return res.status(attR.status).json({ error: 'Failed to fetch attachment' })
+
+    const att = await attR.json()
+
+    if (!att.contentBytes) return res.status(404).json({ error: 'No content' })
+
+    const buf = Buffer.from(att.contentBytes, 'base64')
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `inline; filename="${att.name || 'document.pdf'}"`,
+      'Content-Length': buf.length,
+    })
+    res.send(buf)
+  } catch (err) {
+    console.error('GET /api/finance-emails/pdf:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ─── Unified SF search: Accounts → Contacts → Leads ───────────────────────────
+
+async function searchSfRecords(query, limit = 10) {
+  const parts = query.trim().split(/\s+/)
+  const firstName = soqlEscape(parts[0] || '')
+  const lastName = soqlEscape(parts.slice(1).join(' ') || parts[0] || '')
+  const fullName = soqlEscape(query.trim())
+
+  const results = []
+
+  // 1. Accounts (by Name)
+  try {
+    const accResult = await sfQuery(
+      `SELECT Id, Name, Phone, BillingStreet, BillingCity, BillingState FROM Account WHERE Name LIKE '%${fullName}%' ORDER BY CreatedDate DESC LIMIT ${limit}`
+    )
+    for (const r of accResult.records || []) {
+      results.push({
+        Id: r.Id,
+        objectType: 'Account',
+        Name: r.Name,
+        FirstName: null,
+        LastName: null,
+        Street: r.BillingStreet,
+        City: r.BillingCity,
+        State: r.BillingState,
+        Phone: r.Phone,
+      })
+    }
+  } catch { /* continue */ }
+
+  // 2. Contacts (by FirstName + LastName)
+  try {
+    let contactSOQL
+    if (parts.length > 1) {
+      contactSOQL = `SELECT Id, FirstName, LastName, AccountId, Phone, MailingStreet, MailingCity, MailingState FROM Contact WHERE FirstName LIKE '%${firstName}%' AND LastName LIKE '%${lastName}%' ORDER BY CreatedDate DESC LIMIT ${limit}`
+    } else {
+      contactSOQL = `SELECT Id, FirstName, LastName, AccountId, Phone, MailingStreet, MailingCity, MailingState FROM Contact WHERE LastName LIKE '%${fullName}%' OR FirstName LIKE '%${fullName}%' ORDER BY CreatedDate DESC LIMIT ${limit}`
+    }
+    const conResult = await sfQuery(contactSOQL)
+    for (const r of conResult.records || []) {
+      results.push({
+        Id: r.Id,
+        objectType: 'Contact',
+        Name: `${r.FirstName || ''} ${r.LastName || ''}`.trim(),
+        FirstName: r.FirstName,
+        LastName: r.LastName,
+        AccountId: r.AccountId,
+        Street: r.MailingStreet,
+        City: r.MailingCity,
+        State: r.MailingState,
+        Phone: r.Phone,
+      })
+    }
+  } catch { /* continue */ }
+
+  // 3. Leads (fallback — not yet converted)
+  try {
+    let leadSOQL
+    if (parts.length > 1) {
+      leadSOQL = `SELECT Id, FirstName, LastName, Street, City, State, Phone, Status FROM Lead WHERE FirstName LIKE '%${firstName}%' AND LastName LIKE '%${lastName}%' ORDER BY CreatedDate DESC LIMIT ${limit}`
+    } else {
+      leadSOQL = `SELECT Id, FirstName, LastName, Street, City, State, Phone, Status FROM Lead WHERE LastName LIKE '%${fullName}%' OR FirstName LIKE '%${fullName}%' ORDER BY CreatedDate DESC LIMIT ${limit}`
+    }
+    const leadResult = await sfQuery(leadSOQL)
+    for (const r of leadResult.records || []) {
+      results.push({
+        Id: r.Id,
+        objectType: 'Lead',
+        Name: `${r.FirstName || ''} ${r.LastName || ''}`.trim(),
+        FirstName: r.FirstName,
+        LastName: r.LastName,
+        Street: r.Street,
+        City: r.City,
+        State: r.State,
+        Phone: r.Phone,
+        Status: r.Status,
+      })
+    }
+  } catch { /* continue */ }
+
+  return results.slice(0, limit)
+}
+
+// ─── GET /api/sf/search-records?q= — search Accounts, Contacts, Leads ────────
+
+router.get('/sf/search-records', async (req, res) => {
+  try {
+    const q = (req.query.q || '').toString().trim()
+    if (!q || q.length < 2) return res.json([])
+
+    const results = await searchSfRecords(q, 10)
+    res.json(results)
+  } catch (err) {
+    console.error('GET /api/sf/search-records:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ─── POST /api/finance-emails/attach — attach PDF to SF record ────────────────
+
+router.post('/finance-emails/attach', async (req, res) => {
+  try {
+    const { emailId, attachmentId, pdfName, sfRecordId, sfObjectType, lender } = req.body
+    if (!emailId || !attachmentId || !sfRecordId) {
+      return res.status(400).json({ error: 'Missing emailId, attachmentId, or sfRecordId' })
+    }
+
+    const token = await getGraphToken()
+    const mailbox = process.env.MAILBOX_EMAIL || 'rebecca@rainsoftse.com'
+
+    // 1. Download PDF from M365
+    const attR = await fetch(
+      `https://graph.microsoft.com/v1.0/users/${mailbox}/messages/${encodeURIComponent(emailId)}/attachments/${encodeURIComponent(attachmentId)}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    )
+    if (!attR.ok) return res.status(500).json({ error: 'Failed to download PDF from M365' })
+    const att = await attR.json()
+    if (!att.contentBytes) return res.status(404).json({ error: 'No PDF content' })
+
+    // 2. Attach to SF record as ContentVersion
+    const sfToken = await getSfToken()
+    const filename = pdfName || att.name || 'finance-doc.pdf'
+
+    const cvBody = {
+      Title: filename.replace('.pdf', ''),
+      PathOnClient: filename,
+      VersionData: att.contentBytes,
+      FirstPublishLocationId: sfRecordId,  // works for Account, Contact, or Lead
+    }
+    const cvR = await fetch(`${SF_INSTANCE}/services/data/v59.0/sobjects/ContentVersion`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${sfToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(cvBody)
+    })
+    const cvResult = await cvR.json()
+    if (!cvResult.success) {
+      return res.status(500).json({ error: `SF ContentVersion failed: ${JSON.stringify(cvResult)}` })
+    }
+
+    // 3. Log to Supabase
+    const sb = getSB()
+    try {
+      // Upsert: update if already logged (partial), insert if new
+      const { data: existing } = await sb.from('finance_email_log')
+        .select('id,pdfs_attached')
+        .eq('email_id', emailId)
+        .maybeSingle()
+
+      if (existing) {
+        const attached = existing.pdfs_attached || []
+        attached.push(filename)
+        await sb.from('finance_email_log')
+          .update({ sf_contact_id: sfRecordId, pdfs_attached: attached })
+          .eq('id', existing.id)
+      } else {
+        await sb.from('finance_email_log').insert({
+          email_id: emailId,
+          from_domain: lender || 'unknown',
+          subject: pdfName,
+          customer_name: null,
+          sf_contact_id: sfRecordId,
+          pdfs_attached: [filename],
+          processed_at: new Date().toISOString(),
+          error: null,
+        })
+      }
+    } catch { /* non-critical */ }
+
+    res.json({
+      ok: true,
+      contentVersionId: cvResult.id,
+      sfRecordId,
+      sfObjectType: sfObjectType || 'unknown',
+    })
+  } catch (err) {
+    console.error('POST /api/finance-emails/attach:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
 export default router
