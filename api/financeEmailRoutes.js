@@ -9,7 +9,7 @@ import { createClient } from '@supabase/supabase-js'
 
 const router = express.Router()
 
-const FINANCE_DOMAINS = ['theispc.com', 'foundationfinance.com', 'synchronybusiness.com', 'aquafinance.com']
+const FINANCE_DOMAINS = ['theispc.com', 'foundationfinance.com', 'synchronybusiness.com', 'aquafinance.com', 'fastfieldforms.com', 'fastfield.com']
 const SF_INSTANCE = 'https://rainsoftse.my.salesforce.com'
 
 function getSB() {
@@ -296,6 +296,8 @@ const LENDER_MAP = {
   'foundationfinance.com': 'Foundation',
   'synchronybusiness.com': 'Synchrony',
   'aquafinance.com': 'Aqua',
+  'fastfieldforms.com': 'FastField',
+  'fastfield.com': 'FastField',
 }
 
 function lenderFromDomain(domain) {
