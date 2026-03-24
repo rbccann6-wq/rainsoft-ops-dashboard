@@ -213,6 +213,22 @@ async function verify(lead, printedName, printedAddr) {
 // Passes the entire PDF to Claude with the PDF beta feature.
 // Claude reads all pages and returns an array of lead objects.
 
+
+/** Normalize date string to YYYY-MM-DD for Salesforce */
+function normalizeDateForSF(dateStr) {
+  if (!dateStr) return null
+  // Already YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr
+  // M/D/YYYY or M/D/YY
+  const m = dateStr.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/)
+  if (m) {
+    let year = m[3]
+    if (year.length === 2) year = '20' + year
+    return `${year}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}`
+  }
+  return null // invalid — skip rather than send bad data
+}
+
 async function ocrPdfAllPages(pdfPath) {
   const pdfData = fs.readFileSync(pdfPath).toString('base64')
 
@@ -517,7 +533,8 @@ router.post('/smartmail/push-to-sf/:batchId', async (req, res) => {
       if (lead.hd  != null)      record.Hardness_Level__c    = lead.hd
       // TDS: add 100 to card value (per business rule)
       if (lead.tds != null)      record.TDS_Level__c         = lead.tds + 100
-      if (lead.sample_date)      record.Bottle_Drop_Sample_Date__c = lead.sample_date
+      const sampleDateForSF = normalizeDateForSF(lead.sample_date)
+      if (sampleDateForSF)       record.Bottle_Drop_Sample_Date__c = sampleDateForSF
       if (lead.house_value)      record.House_Value__c              = lead.house_value
 
       const r = await fetch(`${SF_INSTANCE}/services/data/v59.0/sobjects/Lead`, {
@@ -657,7 +674,8 @@ router.post('/smartmail/push-one/:id', async (req, res) => {
     if (lead.filtration)        record.Water_Filters__c    = lead.filtration
     if (lead.hd  != null)       record.Hardness_Level__c   = lead.hd
     if (lead.tds != null)       record.TDS_Level__c        = lead.tds + 100
-    if (lead.sample_date)       record.Bottle_Drop_Sample_Date__c = lead.sample_date
+    const sampleDateForSF2 = normalizeDateForSF(lead.sample_date)
+    if (sampleDateForSF2)       record.Bottle_Drop_Sample_Date__c = sampleDateForSF2
     if (lead.house_value)       record.House_Value__c      = lead.house_value
 
     const r = await fetch(`${SF_INSTANCE}/services/data/v59.0/sobjects/Lead`, {
