@@ -543,6 +543,22 @@ router.post('/smartmail/push-to-sf/:batchId', async (req, res) => {
   }
 })
 
+// GET /api/smartmail/all-pending — all leads not yet pushed to SF
+router.get('/smartmail/all-pending', async (req, res) => {
+  try {
+    const { data, error } = await getSB()
+      .from('smartmail_leads')
+      .select('*')
+      .neq('status', 'rejected')
+      .order('batch_subject', { ascending: true })
+      .order('page_number', { ascending: true })
+    if (error) throw error
+    res.json({ leads: data || [] })
+  } catch (err) {
+    res.status(500).json({ error: err.message, leads: [] })
+  }
+})
+
 // GET /api/smartmail/pdf/:batchId — serve the raw PDF for a batch
 router.get('/smartmail/pdf/:batchId', async (req, res) => {
   try {

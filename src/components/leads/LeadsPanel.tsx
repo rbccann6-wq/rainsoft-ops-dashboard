@@ -8,6 +8,71 @@ import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 
+// ── SmartMail tab: shows existing processed leads + new unprocessed batches ──
+function SmartMailTab({ batches, onRefresh }: { batches: SmartMailBatch[]; onRefresh: () => void }) {
+  const [existingLeads, setExistingLeads] = useState<any[]>([])
+  const [loadingLeads, setLoadingLeads] = useState(true)
+
+  useEffect(() => {
+    fetch('/api/smartmail/all-pending')
+      .then(r => r.json())
+      .then(d => { setExistingLeads(d.leads || []); setLoadingLeads(false) })
+      .catch(() => setLoadingLeads(false))
+  }, [])
+
+  const batchIds = new Set(existingLeads.map((l: any) => l.batch_id))
+  const newBatches = batches.filter(b => !batchIds.has(b.emailId))
+
+  // Group existing leads by batch
+  const byBatch: Record<string, { subject: string; emailId: string; leads: any[] }> = {}
+  for (const lead of existingLeads) {
+    if (!byBatch[lead.batch_id]) {
+      byBatch[lead.batch_id] = { subject: lead.batch_subject, emailId: lead.batch_id, leads: [] }
+    }
+    byBatch[lead.batch_id].leads.push(lead)
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Existing processed leads grouped by batch */}
+      {loadingLeads && (
+        <div className="flex items-center gap-2 text-slate-500 text-sm py-4">
+          <Loader2 className="w-4 h-4 animate-spin" /> Loading leads…
+        </div>
+      )}
+
+      {!loadingLeads && Object.values(byBatch).map(group => (
+        <Card key={group.emailId}>
+          <div className="p-4">
+            <SmartMailReview
+              batch={{ emailId: group.emailId, subject: group.subject, date: '', status: 'done' }}
+              onDone={onRefresh}
+            />
+          </div>
+        </Card>
+      ))}
+
+      {/* New unprocessed batches */}
+      {newBatches.length > 0 && (
+        <>
+          <p className="text-xs text-slate-500 font-medium uppercase tracking-wide pt-2">New Unprocessed Batches</p>
+          {newBatches.map(batch => (
+            <Card key={batch.emailId}>
+              <div className="p-4">
+                <SmartMailReview batch={batch} onDone={onRefresh} />
+              </div>
+            </Card>
+          ))}
+        </>
+      )}
+
+      {!loadingLeads && Object.keys(byBatch).length === 0 && newBatches.length === 0 && (
+        <p className="text-sm text-slate-500 py-8 text-center">No SmartMail leads found.</p>
+      )}
+    </div>
+  )
+}
+
 // Module-level cache — survives tab switching, cleared only on explicit Refresh
 let _leadsCache: { leads: ImeLead[]; batches: SmartMailBatch[]; loadedAt: number } | null = null
 const CHECK_INTERVAL_MS = 30 * 60 * 1000  // 30 min background check
@@ -374,20 +439,9 @@ export function LeadsPanel() {
         </div>
       )}
 
-      {/* SmartMail Batches */}
+      {/* SmartMail Tab */}
       {!loading && activeTab === 'smartmail' && (
-        <div className="space-y-3">
-          {smartBatches.length === 0 && !error && (
-            <p className="text-sm text-slate-500 py-8 text-center">No SmartMail batches found.</p>
-          )}
-          {smartBatches.map(batch => (
-            <Card key={batch.emailId}>
-              <div className="p-4">
-                <SmartMailReview batch={batch} onDone={() => { loadAll(true) }} />
-              </div>
-            </Card>
-          ))}
-        </div>
+        <SmartMailTab batches={smartBatches} onRefresh={() => loadAll(true)} />
       )}
     </div>
   )
