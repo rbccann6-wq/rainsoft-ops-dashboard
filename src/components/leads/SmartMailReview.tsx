@@ -97,7 +97,6 @@ function LeadCard({ lead: initialLead, batchId, onUpdate }: {
 
   const frontPage = lead.page_number
   const backPage = lead.page_number + 1
-  const pdfUrl = `/api/smartmail/pdf/${encodeURIComponent(batchId)}#page=${frontPage}`
   const pdfNewTab = `/api/smartmail/pdf/${encodeURIComponent(batchId)}`
 
   const field = (key: keyof SmartMailLead) =>
