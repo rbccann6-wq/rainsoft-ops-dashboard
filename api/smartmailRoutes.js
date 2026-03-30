@@ -247,15 +247,18 @@ async function ocrPdfAllPages(pdfPath) {
         role: 'user',
         content: [
           { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfData } },
-          { type: 'text', text: `This PDF contains multiple water test lead cards, one per page. Extract data from EVERY page that has a filled-out lead card (skip blank pages or envelope pages).
+          { type: 'text', text: `This PDF contains scanned water test lead postcards. Each card has TWO consecutive pages: the ODD page is the survey/response side (with handwritten data), and the EVEN page is the mailing/marketing side (with the printed mailing label). So pages 1-2 = card 1, pages 3-4 = card 2, etc.
+
+Extract data from EVERY card. For each card, combine info from both the survey side (handwritten answers) and the mailing side (printed name/address label).
 
 Return a JSON array where each element represents one lead card with these fields:
-full_name (handwritten name), address (handwritten street only), city, state (2-letter), zip, phone, email,
+pdf_page (the ODD page number where the survey side appears, e.g. 1, 3, 5...),
+full_name (handwritten name from survey side), address (handwritten street only), city, state (2-letter), zip, phone, email,
 water_source ("City" or "Well"), buys_bottled_water ("Yes"/"No"), homeowner ("Yes"/"No" or null),
 water_conditions (array from: Chlorine Smell, Brown Stains, Scale Deposits, Rotten Smell, Cloudiness),
 water_quality ("Good"/"Fair"/"Poor"), filtration (array from: Refrigerator, Whole Home, Sink, None),
 tds (number or null), hd (number or null), ph (number or null),
-sample_date (string or null), printed_name (PRINTED name from mailing label), printed_address (PRINTED street from mailing label).
+sample_date (string or null), printed_name (PRINTED name from mailing label on the EVEN page), printed_address (PRINTED full address from mailing label on the EVEN page).
 
 Use null for missing fields. Return ONLY the JSON array, no explanation.` }
         ]
@@ -350,7 +353,7 @@ router.post('/smartmail/process-batch', async (req, res) => {
         const row = {
           batch_id: emailId,
           batch_subject: subject || filename,
-          page_number: i + 1,
+          page_number: lead.pdf_page || (i * 2) + 1,
           full_name: lead.full_name,
           address: lead.address,
           city: lead.city,

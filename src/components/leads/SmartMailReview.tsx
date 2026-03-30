@@ -95,7 +95,9 @@ function LeadCard({ lead: initialLead, batchId, onUpdate }: {
   const [syncResult, setSyncResult] = useState<{ ok: boolean; msg: string } | null>(null)
   const [savedFlash, setSavedFlash] = useState(false)
 
-  const pdfUrl = `/api/smartmail/pdf/${encodeURIComponent(batchId)}#page=${lead.page_number}`
+  const frontPage = lead.page_number
+  const backPage = lead.page_number + 1
+  const pdfUrl = `/api/smartmail/pdf/${encodeURIComponent(batchId)}#page=${frontPage}`
   const pdfNewTab = `/api/smartmail/pdf/${encodeURIComponent(batchId)}`
 
   const field = (key: keyof SmartMailLead) =>
@@ -197,21 +199,36 @@ function LeadCard({ lead: initialLead, batchId, onUpdate }: {
           {/* Two-column layout: PDF viewer + editable form */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
 
-            {/* Left: Card image viewer */}
+            {/* Left: Card image viewer (front + back) */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Card (Page {lead.page_number})</p>
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Card (Pages {frontPage}–{backPage})</p>
                 <a href={pdfNewTab} target="_blank" rel="noopener noreferrer"
                   className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1">
                   <ExternalLink className="w-3 h-3" /> Open PDF
                 </a>
               </div>
-              <div className="bg-slate-900 border border-slate-700 rounded-lg overflow-hidden" style={{ height: 480 }}>
-                <iframe
-                  src={pdfUrl}
-                  className="w-full h-full"
-                  title={`Card page ${lead.page_number}`}
-                />
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <p className="text-xs text-slate-500 mb-1 text-center">Front (Survey)</p>
+                  <div className="bg-slate-900 border border-slate-700 rounded-lg overflow-hidden" style={{ height: 280 }}>
+                    <iframe
+                      src={`/api/smartmail/pdf/${encodeURIComponent(batchId)}#page=${frontPage}`}
+                      className="w-full h-full"
+                      title={`Card front page ${frontPage}`}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500 mb-1 text-center">Back (Mailing Label)</p>
+                  <div className="bg-slate-900 border border-slate-700 rounded-lg overflow-hidden" style={{ height: 280 }}>
+                    <iframe
+                      src={`/api/smartmail/pdf/${encodeURIComponent(batchId)}#page=${backPage}`}
+                      className="w-full h-full"
+                      title={`Card back page ${backPage}`}
+                    />
+                  </div>
+                </div>
               </div>
               {/* Printed label reference */}
               {(lead.printed_name || lead.printed_address) && (
