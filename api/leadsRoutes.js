@@ -13,6 +13,34 @@ function getSB() {
 
 const router = express.Router()
 
+// ─── Auto-migrate: add duplicate tracking columns to lowes_leads_cache ────────
+;(async () => {
+  try {
+    const sb = getSB()
+    // Test if columns exist by reading them
+    const { error } = await sb.from('lowes_leads_cache').select('duplicate_sf_id,duplicate_type').limit(1)
+    if (error && error.message?.includes('duplicate_sf_id')) {
+      console.log('[migrate] Adding duplicate_sf_id & duplicate_type columns to lowes_leads_cache...')
+      // Columns don't exist — use raw SQL via a temp RPC function
+      const { error: fnErr } = await sb.rpc('exec_sql', {
+        query: `ALTER TABLE lowes_leads_cache ADD COLUMN IF NOT EXISTS duplicate_sf_id text; ALTER TABLE lowes_leads_cache ADD COLUMN IF NOT EXISTS duplicate_type text;`
+      })
+      if (fnErr) {
+        console.warn('[migrate] Could not auto-add columns (add manually):', fnErr.message)
+        console.warn('[migrate] Run this SQL in Supabase dashboard:')
+        console.warn('[migrate]   ALTER TABLE lowes_leads_cache ADD COLUMN IF NOT EXISTS duplicate_sf_id text;')
+        console.warn('[migrate]   ALTER TABLE lowes_leads_cache ADD COLUMN IF NOT EXISTS duplicate_type text;')
+      } else {
+        console.log('[migrate] Columns added successfully')
+      }
+    } else {
+      console.log('[leads] duplicate tracking columns OK')
+    }
+  } catch (err) {
+    console.warn('[migrate] Migration check failed:', err.message)
+  }
+})()
+
 // Normalize US phone to (XXX) XXX-XXXX display format
 function normalizePhone(raw) {
   if (!raw) return ''
@@ -254,6 +282,8 @@ router.get('/leads', async (req, res) => {
             emailId: email.id,
             rentcast: cached.rentcast,
             sfLeadId: cached.sf_lead_id || null,
+            duplicateSfId: cached.duplicate_sf_id || null,
+            duplicateType: cached.duplicate_type || null,
           }
         }
 
@@ -554,7 +584,26 @@ async function syncLeadsToSalesforce(leads) {
         // Update cache with SF lead ID
         try { await getSB().from('lowes_leads_cache').update({ sf_lead_id: result.id }).eq('wo_id', lead.woId) } catch {}
       } else {
-        console.warn(`[SF sync] Failed ${lead.woId}:`, JSON.stringify(result).slice(0, 150))
+        // Check for duplicate detection
+        const dupResult = Array.isArray(result) ? result[0] : result
+        if (dupResult?.errorCode === 'DUPLICATES_DETECTED') {
+          const matchResult = dupResult.duplicateResult?.matchResults?.[0]
+          const entityType = matchResult?.entityType || 'Unknown'
+          const dupId = matchResult?.matchRecords?.[0]?.record?.Id || null
+          console.log(`[SF sync] Duplicate detected for WO#${lead.woId}: ${entityType} ${dupId}`)
+          if (dupId) {
+            try {
+              await getSB().from('lowes_leads_cache').update({
+                duplicate_sf_id: dupId,
+                duplicate_type: entityType,
+              }).eq('wo_id', lead.woId)
+            } catch (e) {
+              console.warn(`[SF sync] Could not save duplicate info for WO#${lead.woId}:`, e.message)
+            }
+          }
+        } else {
+          console.warn(`[SF sync] Failed ${lead.woId}:`, JSON.stringify(result).slice(0, 150))
+        }
       }
     } catch (err) {
       console.error(`[SF sync] Error for WO#${lead.woId}:`, err.message)

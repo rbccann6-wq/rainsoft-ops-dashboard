@@ -111,6 +111,8 @@ export interface ImeLead {
   emailId: string
   contacted?: boolean
   sfLeadId?: string | null
+  duplicateSfId?: string | null
+  duplicateType?: string | null
   rentcast?: {
     price: number | null
     low: number | null

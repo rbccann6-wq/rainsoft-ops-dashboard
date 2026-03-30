@@ -323,6 +323,17 @@ export function LeadsPanel() {
                             ✅ SF
                           </a>
                         )}
+                        {lead.duplicateSfId && !lead.sfLeadId && (
+                          <a
+                            href={`https://rainsoftse.my.salesforce.com/${lead.duplicateSfId}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs bg-red-600 text-white px-2 py-0.5 rounded font-medium hover:bg-red-500 flex items-center gap-1"
+                            title={`Duplicate ${lead.duplicateType || 'record'} in Salesforce`}
+                          >
+                            ⚠️ DUPLICATE — View {lead.duplicateType || 'Record'} →
+                          </a>
+                        )}
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
