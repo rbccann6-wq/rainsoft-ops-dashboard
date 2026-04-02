@@ -83,14 +83,13 @@ router.get('/deal-tracker/deals', async (req, res) => {
 
     const whereClause = where.length > 0 ? 'WHERE ' + where.join(' AND ') : ''
 
-    // Get deals with optional join to main deals table for extra info
+    // Get deals
     const query = `
       SELECT 
         fm.*,
         NULL::numeric as sale_amount,
         NULL::text as deal_source,
         NULL::text as sales_rep,
-        NULL::numeric as finance_amount,
         NULL::date as sale_date,
         NULL::text as deal_notes
       FROM finance_monitor_deals fm
