@@ -196,9 +196,26 @@ function effectiveRate(deal: Deal): number | null {
   return deal.buyRate ?? deal.discount ?? null
 }
 
-/** Normalize customer name for grouping */
+/** Normalize customer name for grouping.
+ *  Handles portal format differences:
+ *    "CHRISTOPHER HAWK" (Foundation) → "HAWK C"
+ *    "HAWK, C"          (ISPC)      → "HAWK C"
+ *    "HAWK, CHRISTOPHER" (any)      → "HAWK C"
+ *  Key = LASTNAME + FIRST_INITIAL (uppercase, single space)
+ */
 function normName(name: string): string {
-  return name.trim().toUpperCase().replace(/\s+/g, ' ')
+  const clean = name.trim().toUpperCase().replace(/\s+/g, ' ')
+  // "LAST, FIRST" or "LAST, F" format
+  const commaMatch = clean.match(/^([A-Z'-]+)\s*,\s*([A-Z])/)
+  if (commaMatch) return `${commaMatch[1]} ${commaMatch[2]}`
+  // "FIRST LAST" format — take last word as surname, first char of first word
+  const parts = clean.split(' ').filter(Boolean)
+  if (parts.length >= 2) {
+    const last = parts[parts.length - 1]
+    const firstInitial = parts[0][0]
+    return `${last} ${firstInitial}`
+  }
+  return clean
 }
 
 /** Group deals by customer, compute best rate per group */
@@ -243,8 +260,13 @@ function groupByCustomer(deals: Deal[]): CustomerGroup[] {
       !['Funded', 'Declined', 'Cancelled', 'No Available Offer Found'].includes(d.status)
     )
 
+    // Use the most complete (longest) customer name for display
+    const displayName = groupDeals.reduce((a, b) =>
+      b.customerName.length > a.customerName.length ? b : a
+    ).customerName
+
     groups.push({
-      name: groupDeals[0].customerName,
+      name: displayName,
       deals: groupDeals,
       portals,
       bestRateDealId,
