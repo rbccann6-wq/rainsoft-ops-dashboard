@@ -61,7 +61,7 @@ function historyCamel(row) {
 router.get('/deal-tracker/deals', async (req, res) => {
   try {
     const db = getDb()
-    const { portal, status, search, page = 1, limit = 50 } = req.query
+    const { portal, status, search, page = 1, limit = 50, grouped = 'false' } = req.query
     const offset = (parseInt(page) - 1) * parseInt(limit)
 
     let where = []
@@ -85,16 +85,10 @@ router.get('/deal-tracker/deals', async (req, res) => {
 
     // Get deals
     const query = `
-      SELECT 
-        fm.*,
-        NULL::numeric as sale_amount,
-        NULL::text as deal_source,
-        NULL::text as sales_rep,
-        NULL::date as sale_date,
-        NULL::text as deal_notes
+      SELECT fm.*
       FROM finance_monitor_deals fm
       ${whereClause}
-      ORDER BY fm.updated_at DESC
+      ORDER BY fm.customer_name ASC, fm.updated_at DESC
       LIMIT $${paramIdx++} OFFSET $${paramIdx++}
     `
     params.push(parseInt(limit), offset)
@@ -103,21 +97,53 @@ router.get('/deal-tracker/deals', async (req, res) => {
 
     // Get total count
     const countQuery = `SELECT COUNT(*) FROM finance_monitor_deals fm ${whereClause}`
-    const countParams = params.slice(0, params.length - 2) // remove limit/offset
+    const countParams = params.slice(0, params.length - 2)
     const { rows: countRows } = await db.query(countQuery, countParams)
 
-    // Check which customers have multi-portal submissions
-    const multiQuery = `
-      SELECT customer_name FROM finance_monitor_deals
-      GROUP BY customer_name HAVING COUNT(DISTINCT portal) > 1
-    `
-    const { rows: multiRows } = await db.query(multiQuery)
-    const multiCustomers = new Set(multiRows.map(r => r.customer_name))
+    // Convert rows to camelCase
+    const enriched = rows.map(row => toCamel(row))
 
-    const enriched = rows.map(row => {
-      row.isMultiSubmit = multiCustomers.has(row.customer_name)
-      return toCamel(row)
-    })
+    // GROUP BY CUSTOMER — each customer shows all portals they were submitted to
+    if (grouped === 'true') {
+      const customerMap = {}
+      for (const deal of enriched) {
+        const key = deal.customerName || 'Unknown'
+        if (!customerMap[key]) {
+          customerMap[key] = {
+            customerName: deal.customerName,
+            address: deal.address,
+            state: deal.state,
+            submittedDate: deal.submittedDate,
+            portals: [],
+            isMultiSubmit: false,
+          }
+        }
+        customerMap[key].portals.push({
+          portal: deal.portal,
+          status: deal.status,
+          decision: deal.decision,
+          dealId: deal.dealId,
+          financeAmount: deal.financeAmount,
+          buyRate: deal.buyRate,
+          tier: deal.tier,
+          referenceNumber: deal.referenceNumber,
+          fundingDate: deal.fundingDate,
+          lastCheckedAt: deal.lastCheckedAt,
+          updatedAt: deal.updatedAt,
+        })
+        if (customerMap[key].portals.length > 1) {
+          customerMap[key].isMultiSubmit = true
+        }
+      }
+      const grouped_customers = Object.values(customerMap).sort((a, b) =>
+        (a.customerName || '').localeCompare(b.customerName || '')
+      )
+      return res.json({
+        customers: grouped_customers,
+        total: grouped_customers.length,
+        dealsTotal: parseInt(countRows[0].count),
+      })
+    }
 
     const totalCount = parseInt(countRows[0].count)
     const pageInt = parseInt(page)
