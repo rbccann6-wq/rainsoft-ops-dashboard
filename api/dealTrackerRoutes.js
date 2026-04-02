@@ -454,7 +454,31 @@ router.post('/deal-tracker/init-db', async (req, res) => {
       CREATE INDEX IF NOT EXISTS idx_fm_deals_customer ON finance_monitor_deals(customer_name);
       CREATE INDEX IF NOT EXISTS idx_fm_history_deal ON finance_monitor_history(deal_id, portal);
     `)
-    res.json({ ok: true, message: 'Finance monitor tables created' })
+
+    // Add new columns (safe — IF NOT EXISTS equivalent via DO block)
+    const newCols = [
+      ['coapplicant', 'TEXT'],
+      ['finance_amount', 'NUMERIC(10,2)'],
+      ['buy_rate', 'NUMERIC(5,2)'],
+      ['tier', 'INTEGER'],
+      ['reference_number', 'TEXT'],
+      ['option_code', 'TEXT'],
+      ['exp_date', 'TEXT'],
+      ['funding_date', 'TEXT'],
+      ['rescind_date', 'TEXT'],
+      ['state', 'TEXT'],
+      ['address', 'TEXT'],
+    ]
+    for (const [col, type] of newCols) {
+      await db.query(`
+        DO $$ BEGIN
+          ALTER TABLE finance_monitor_deals ADD COLUMN ${col} ${type};
+        EXCEPTION WHEN duplicate_column THEN NULL;
+        END $$;
+      `)
+    }
+
+    res.json({ ok: true, message: 'Finance monitor tables created + columns updated' })
   } catch (err) {
     console.error('[DealTracker] init-db error:', err.message)
     res.status(500).json({ error: err.message })
