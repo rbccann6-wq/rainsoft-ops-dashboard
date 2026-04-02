@@ -29,9 +29,29 @@ interface Deal {
   dealSource: string | null
   salesRep: string | null
   financeAmount: number | null
+  buyRate: number | null
+  tier: number | null
+  fundingDate: string | null
+  expDate: string | null
+  referenceNumber: string | null
+  optionCode: string | null
+  coapplicant: string | null
+  rescindDate: string | null
+  state: string | null
+  address: string | null
   saleDate: string | null
   pgNotes: string | null
   pgId: number | null
+}
+
+interface CustomerGroup {
+  name: string
+  deals: Deal[]
+  portals: string[]
+  bestRateDealId: string | null
+  bestRate: number | null
+  totalAmount: number | null
+  hasActive: boolean
 }
 
 interface HistoryEntry {
@@ -88,6 +108,8 @@ const STATUSES = [
   'CRD: In Review',
   'Under Review',
   'Approved',
+  'Approved - Need Docs',
+  'Approved - In Processing',
   'Declined',
   'Awaiting Docs',
   'Documents Received',
@@ -95,6 +117,9 @@ const STATUSES = [
   'Fund Me',
   'Funding Pending',
   'Funded',
+  'Cancelled',
+  'Pending',
+  'No Available Offer Found',
   'Application on Hold',
   'Funding On Hold',
 ]
@@ -120,6 +145,11 @@ const STATUS_COLORS: Record<string, string> = {
   'CRD: In Review':        'text-blue-400',
   'Under Review':          'text-blue-400',
   'Care Call Pending':     'text-violet-400',
+  'Approved - Need Docs':  'text-amber-400',
+  'Approved - In Processing': 'text-blue-400',
+  'Cancelled':             'text-red-400',
+  'Pending':               'text-slate-400',
+  'No Available Offer Found': 'text-red-300',
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -159,6 +189,80 @@ function fmtRate(discount: number | null): string {
 function fmtCurrency(n: number | null): string {
   if (n == null) return '—'
   return `$${Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+}
+
+/** Get effective rate: buyRate (Foundation) or discount (ISPC) — whichever is populated */
+function effectiveRate(deal: Deal): number | null {
+  return deal.buyRate ?? deal.discount ?? null
+}
+
+/** Normalize customer name for grouping */
+function normName(name: string): string {
+  return name.trim().toUpperCase().replace(/\s+/g, ' ')
+}
+
+/** Group deals by customer, compute best rate per group */
+function groupByCustomer(deals: Deal[]): CustomerGroup[] {
+  const map = new Map<string, Deal[]>()
+  for (const deal of deals) {
+    const key = normName(deal.customerName)
+    if (!map.has(key)) map.set(key, [])
+    map.get(key)!.push(deal)
+  }
+
+  const groups: CustomerGroup[] = []
+  for (const [, groupDeals] of map) {
+    // Sort: active first, then by date desc
+    groupDeals.sort((a, b) => {
+      const aActive = !['Funded', 'Declined', 'Cancelled', 'No Available Offer Found'].includes(a.status)
+      const bActive = !['Funded', 'Declined', 'Cancelled', 'No Available Offer Found'].includes(b.status)
+      if (aActive !== bActive) return aActive ? -1 : 1
+      return (b.submittedDate || '').localeCompare(a.submittedDate || '')
+    })
+
+    const portals = [...new Set(groupDeals.map(d => d.portal))]
+
+    // Best rate = lowest rate among approved deals
+    const approved = groupDeals.filter(d =>
+      d.decision === 'Approved' && effectiveRate(d) != null
+    )
+    let bestRateDealId: string | null = null
+    let bestRate: number | null = null
+    if (approved.length > 0) {
+      const best = approved.reduce((a, b) =>
+        (effectiveRate(a)! < effectiveRate(b)!) ? a : b
+      )
+      bestRateDealId = best.dealId
+      bestRate = effectiveRate(best)
+    }
+
+    const amounts = groupDeals.map(d => d.financeAmount).filter(Boolean) as number[]
+    const totalAmount = amounts.length > 0 ? Math.max(...amounts) : null
+
+    const hasActive = groupDeals.some(d =>
+      !['Funded', 'Declined', 'Cancelled', 'No Available Offer Found'].includes(d.status)
+    )
+
+    groups.push({
+      name: groupDeals[0].customerName,
+      deals: groupDeals,
+      portals,
+      bestRateDealId,
+      bestRate,
+      totalAmount,
+      hasActive,
+    })
+  }
+
+  // Sort groups: active first, then by most recent submission
+  groups.sort((a, b) => {
+    if (a.hasActive !== b.hasActive) return a.hasActive ? -1 : 1
+    const aDate = a.deals[0]?.submittedDate || ''
+    const bDate = b.deals[0]?.submittedDate || ''
+    return bDate.localeCompare(aDate)
+  })
+
+  return groups
 }
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
@@ -323,6 +427,162 @@ function HistoryTimeline({ history }: { history: HistoryEntry[] }) {
   )
 }
 
+function CustomerGroupCard({ group, comparisons }: { group: CustomerGroup; comparisons: Comparison[] }) {
+  const [expanded, setExpanded] = useState(group.hasActive)
+  const [expandedDealId, setExpandedDealId] = useState<string | null>(null)
+
+  const summaryStatus = group.deals.some(d => d.status === 'Funded') ? 'Funded'
+    : group.deals.some(d => d.status === 'Funding Pending') ? 'Funding Pending'
+    : group.deals.some(d => ['Awaiting Docs', 'Approved - Need Docs', 'Approved - In Processing'].includes(d.status)) ? 'Awaiting Docs'
+    : group.deals.some(d => d.decision === 'Approved') ? 'Approved'
+    : group.deals.some(d => d.status === 'Pending' || d.status?.includes('Review')) ? 'Pending'
+    : group.deals[0]?.status || '—'
+
+  return (
+    <Card className="overflow-hidden">
+      {/* Customer header */}
+      <div
+        onClick={() => setExpanded(v => !v)}
+        className={cn(
+          'flex items-center gap-3 px-4 py-3 cursor-pointer transition-colors',
+          expanded ? 'bg-slate-800/60' : 'hover:bg-slate-800/30'
+        )}
+      >
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-semibold text-slate-200 text-sm">{group.name}</span>
+            {group.deals[0]?.coapplicant && (
+              <span className="text-xs text-slate-500">& {group.deals[0].coapplicant}</span>
+            )}
+            {group.portals.map(p => (
+              <PortalBadge key={p} portal={p} />
+            ))}
+            {group.portals.length > 1 && (
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-900/60 text-purple-300 border border-purple-700">
+                {group.portals.length} PORTALS
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-4 flex-shrink-0">
+          {group.totalAmount && (
+            <span className="text-sm font-mono font-semibold text-slate-300">
+              {fmtCurrency(group.totalAmount)}
+            </span>
+          )}
+          {group.bestRate != null && (
+            <span className="text-xs font-mono px-2 py-0.5 rounded bg-emerald-900/40 text-emerald-300 border border-emerald-800">
+              {group.bestRate}% rate
+            </span>
+          )}
+          <span className={cn('text-xs font-medium whitespace-nowrap', statusColor(summaryStatus))}>
+            {summaryStatus}
+          </span>
+          {expanded
+            ? <ChevronUp className="w-4 h-4 text-slate-400" />
+            : <ChevronDown className="w-4 h-4 text-slate-500" />
+          }
+        </div>
+      </div>
+
+      {/* Deals table */}
+      {expanded && (
+        <div className="border-t border-slate-800">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-800/50">
+                <th className="text-left px-4 py-2 text-xs font-medium text-slate-500">Portal</th>
+                <th className="text-left px-3 py-2 text-xs font-medium text-slate-500">Decision</th>
+                <th className="text-left px-3 py-2 text-xs font-medium text-slate-500">Rate</th>
+                <th className="text-left px-3 py-2 text-xs font-medium text-slate-500">Tier</th>
+                <th className="text-left px-3 py-2 text-xs font-medium text-slate-500">Amount</th>
+                <th className="text-left px-3 py-2 text-xs font-medium text-slate-500">Status</th>
+                <th className="text-left px-3 py-2 text-xs font-medium text-slate-500">Submitted</th>
+                <th className="text-left px-3 py-2 text-xs font-medium text-slate-500">Funded</th>
+                <th className="px-3 py-2 w-6"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {group.deals.map(deal => {
+                const rate = effectiveRate(deal)
+                const isBest = deal.dealId === group.bestRateDealId
+                const isExp = expandedDealId === deal.dealId
+
+                return (
+                  <>
+                    <tr
+                      key={deal.dealId}
+                      onClick={() => setExpandedDealId(prev => prev === deal.dealId ? null : deal.dealId)}
+                      className={cn(
+                        'border-b border-slate-800/30 cursor-pointer transition-colors',
+                        isBest && 'bg-emerald-950/20',
+                        isExp ? 'bg-slate-800/40' : 'hover:bg-slate-800/20'
+                      )}
+                    >
+                      <td className="px-4 py-2">
+                        <PortalBadge portal={deal.portal} />
+                      </td>
+                      <td className="px-3 py-2">
+                        <DecisionBadge decision={deal.decision} />
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-1">
+                          <span className={cn(
+                            'font-mono font-semibold text-sm',
+                            rate != null ? 'text-emerald-300' : 'text-slate-500'
+                          )}>
+                            {rate != null ? `${rate}%` : '—'}
+                          </span>
+                          {isBest && (
+                            <span className="px-1 py-0.5 rounded text-[9px] font-bold bg-emerald-800/60 text-emerald-300 border border-emerald-700 leading-none">
+                              BEST
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-xs text-slate-400">
+                        {deal.tier ?? '—'}
+                      </td>
+                      <td className="px-3 py-2 text-xs text-slate-300 font-mono">
+                        {fmtCurrency(deal.financeAmount)}
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className={cn('text-xs whitespace-nowrap', statusColor(deal.status))}>
+                          {deal.status}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-xs text-slate-400">
+                        {fmtDate(deal.submittedDate)}
+                      </td>
+                      <td className="px-3 py-2 text-xs text-slate-400">
+                        {fmtDate(deal.fundingDate)}
+                      </td>
+                      <td className="px-3 py-2">
+                        {isExp
+                          ? <ChevronUp className="w-3 h-3 text-slate-400" />
+                          : <ChevronDown className="w-3 h-3 text-slate-600" />
+                        }
+                      </td>
+                    </tr>
+                    {isExp && (
+                      <tr key={`${deal.dealId}-detail`}>
+                        <td colSpan={9} className="p-0">
+                          <ExpandedRow deal={deal} comparisons={comparisons} />
+                        </td>
+                      </tr>
+                    )}
+                  </>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  )
+}
+
 function ExpandedRow({ deal, comparisons }: { deal: Deal; comparisons: Comparison[] }) {
   const [history, setHistory] = useState<HistoryEntry[]>([])
   const [loading, setLoading] = useState(true)
@@ -370,6 +630,42 @@ function ExpandedRow({ deal, comparisons }: { deal: Deal; comparisons: Compariso
               <div>
                 <span className="text-slate-500">Finance Amount: </span>
                 <span className="text-slate-300">{fmtCurrency(deal.financeAmount)}</span>
+              </div>
+            )}
+            {deal.buyRate != null && (
+              <div>
+                <span className="text-slate-500">Buy Rate: </span>
+                <span className="text-slate-300">{deal.buyRate}%</span>
+              </div>
+            )}
+            {deal.tier != null && (
+              <div>
+                <span className="text-slate-500">Tier: </span>
+                <span className="text-slate-300">{deal.tier}</span>
+              </div>
+            )}
+            {deal.fundingDate && (
+              <div>
+                <span className="text-slate-500">Funding Date: </span>
+                <span className="text-slate-300">{deal.fundingDate}</span>
+              </div>
+            )}
+            {deal.referenceNumber && (
+              <div>
+                <span className="text-slate-500">Reference#: </span>
+                <span className="text-slate-300 font-mono">{deal.referenceNumber}</span>
+              </div>
+            )}
+            {deal.optionCode && (
+              <div>
+                <span className="text-slate-500">Option Code: </span>
+                <span className="text-slate-300">{deal.optionCode}</span>
+              </div>
+            )}
+            {deal.address && (
+              <div className="col-span-2">
+                <span className="text-slate-500">Address: </span>
+                <span className="text-slate-300">{deal.address}{deal.state ? `, ${deal.state}` : ''}</span>
               </div>
             )}
             {deal.dealSource && (
@@ -428,6 +724,7 @@ export function DealTrackerPage() {
   const [expandedDeal, setExpandedDeal] = useState<string | null>(null)
   const [autoRefresh, setAutoRefresh] = useState(false)
   const [showStaleOnly, setShowStaleOnly] = useState(false)
+  const [groupMode, setGroupMode] = useState(true)
 
   const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -507,6 +804,18 @@ export function DealTrackerPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setGroupMode(v => !v)}
+            className={cn(
+              'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium border transition-colors',
+              groupMode
+                ? 'bg-purple-600/20 text-purple-300 border-purple-700/50'
+                : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-slate-200'
+            )}
+          >
+            <Users className="w-3.5 h-3.5" />
+            {groupMode ? 'Grouped' : 'Group by Customer'}
+          </button>
           <button
             onClick={() => setAutoRefresh(v => !v)}
             className={cn(
@@ -657,49 +966,66 @@ export function DealTrackerPage() {
         </CardContent>
       </Card>
 
-      {/* Main Table */}
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            <TrendingUp className="w-4 h-4 text-blue-400" />
-            Deals
-          </CardTitle>
-          <span className="text-xs text-slate-500">
-            {loading ? 'Loading…' : `${pagination.total} total`}
-          </span>
-        </CardHeader>
+      {/* Main Content — Grouped or Flat */}
+      {groupMode ? (
+        /* ─── Grouped by Customer ──────────────────────────────── */
+        <div className="space-y-3">
+          {loading && deals.length === 0 ? (
+            <Card>
+              <CardContent className="py-10 text-center text-slate-500 text-sm">
+                <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2" />
+                Loading deals…
+              </CardContent>
+            </Card>
+          ) : deals.length === 0 ? (
+            <Card>
+              <CardContent className="py-10 text-center text-slate-500 text-sm">
+                No deals found
+              </CardContent>
+            </Card>
+          ) : (
+            <>
+              <div className="text-xs text-slate-500">
+                {deals.length} deals across {new Set(deals.map(d => normName(d.customerName))).size} customers
+              </div>
+              {groupByCustomer(deals).map(group => (
+                <CustomerGroupCard key={normName(group.name)} group={group} comparisons={comparisons} />
+              ))}
+            </>
+          )}
+        </div>
+      ) : (
+        /* ─── Flat Table ───────────────────────────────────────── */
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              <TrendingUp className="w-4 h-4 text-blue-400" />
+              Deals
+            </CardTitle>
+            <span className="text-xs text-slate-500">
+              {loading ? 'Loading…' : `${pagination.total} total`}
+            </span>
+          </CardHeader>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-800">
-                <th className="text-left px-5 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Customer</th>
-                <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Submitted</th>
-                <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Portal</th>
-                <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Decision</th>
-                <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Buy Rate</th>
-                <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Status</th>
-                <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">In Status</th>
-                <th className="px-3 py-3 w-8"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading && deals.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="px-5 py-10 text-center text-slate-500 text-sm">
-                    <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2" />
-                    Loading deals…
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-800">
+                  <th className="text-left px-5 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Customer</th>
+                  <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Submitted</th>
+                  <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Portal</th>
+                  <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Decision</th>
+                  <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Rate</th>
+                  <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Amount</th>
+                  <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Status</th>
+                  <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">In Status</th>
+                  <th className="px-3 py-3 w-8"></th>
                 </tr>
-              ) : deals.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="px-5 py-10 text-center text-slate-500 text-sm">
-                    No deals found
-                  </td>
-                </tr>
-              ) : (
-                deals.map(deal => {
+              </thead>
+              <tbody>
+                {deals.map(deal => {
                   const isExpanded = expandedDeal === deal.dealId
+                  const rate = effectiveRate(deal)
                   const isMulti = comparisons.some(c => c.deals.some(d => d.dealId === deal.dealId) && c.portalCount > 1)
 
                   return (
@@ -712,7 +1038,6 @@ export function DealTrackerPage() {
                           isExpanded ? 'bg-slate-800/40' : 'hover:bg-slate-800/30'
                         )}
                       >
-                        {/* Customer Name */}
                         <td className="px-5 py-3">
                           <div className="flex items-center gap-2">
                             <span className="font-medium text-slate-200 whitespace-nowrap">
@@ -725,45 +1050,34 @@ export function DealTrackerPage() {
                             )}
                           </div>
                         </td>
-
-                        {/* Submitted Date */}
                         <td className="px-3 py-3 text-slate-400 text-xs whitespace-nowrap">
                           {fmtDate(deal.submittedDate)}
                         </td>
-
-                        {/* Portal */}
                         <td className="px-3 py-3">
                           <PortalBadge portal={deal.portal} />
                         </td>
-
-                        {/* Decision */}
                         <td className="px-3 py-3">
                           <DecisionBadge decision={deal.decision} />
                         </td>
-
-                        {/* Buy Rate */}
                         <td className="px-3 py-3">
                           <span className={cn(
                             'font-mono font-semibold text-sm',
-                            deal.discount != null ? 'text-emerald-300' : 'text-slate-500'
+                            rate != null ? 'text-emerald-300' : 'text-slate-500'
                           )}>
-                            {fmtRate(deal.discount)}
+                            {rate != null ? `${rate}%` : '—'}
                           </span>
                         </td>
-
-                        {/* Status */}
+                        <td className="px-3 py-3 text-xs text-slate-300 font-mono">
+                          {fmtCurrency(deal.financeAmount)}
+                        </td>
                         <td className="px-3 py-3">
                           <span className={cn('text-xs whitespace-nowrap', statusColor(deal.status))}>
                             {deal.status}
                           </span>
                         </td>
-
-                        {/* Time in Status */}
                         <td className="px-3 py-3 text-slate-500 text-xs whitespace-nowrap">
                           {timeAgo(deal.statusChangedAt)}
                         </td>
-
-                        {/* Expand toggle */}
                         <td className="px-3 py-3">
                           {isExpanded
                             ? <ChevronUp className="w-4 h-4 text-slate-400" />
@@ -771,46 +1085,29 @@ export function DealTrackerPage() {
                           }
                         </td>
                       </tr>
-
-                      {/* Expanded detail row */}
                       {isExpanded && (
                         <tr key={`${deal.dealId}-expanded`}>
-                          <td colSpan={8} className="p-0">
+                          <td colSpan={9} className="p-0">
                             <ExpandedRow deal={deal} comparisons={comparisons} />
                           </td>
                         </tr>
                       )}
                     </>
                   )
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Pagination */}
-        {pagination.pages > 1 && (
-          <div className="px-5 py-3 border-t border-slate-800 flex items-center justify-between">
-            <span className="text-xs text-slate-500">
-              Page {pagination.page} of {pagination.pages}
-            </span>
-            <div className="flex gap-2">
-              <button
-                disabled={pagination.page <= 1}
-                className="text-xs px-3 py-1 rounded border border-slate-700 text-slate-400 hover:text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                Previous
-              </button>
-              <button
-                disabled={pagination.page >= pagination.pages}
-                className="text-xs px-3 py-1 rounded border border-slate-700 text-slate-400 hover:text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                Next
-              </button>
-            </div>
+                })}
+              </tbody>
+            </table>
           </div>
-        )}
-      </Card>
+
+          {pagination.pages > 1 && (
+            <div className="px-5 py-3 border-t border-slate-800 flex items-center justify-between">
+              <span className="text-xs text-slate-500">
+                Page {pagination.page} of {pagination.pages}
+              </span>
+            </div>
+          )}
+        </Card>
+      )}
     </div>
   )
 }
