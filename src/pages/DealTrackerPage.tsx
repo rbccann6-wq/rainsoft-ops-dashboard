@@ -1,0 +1,816 @@
+import { useState, useEffect, useCallback, useRef } from 'react'
+import {
+  TrendingUp, RefreshCw, Clock, CheckCircle2, XCircle, AlertCircle,
+  ChevronDown, ChevronUp, Search, Filter, BarChart3, FileText, Users
+} from 'lucide-react'
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card'
+import { Button } from '@/components/ui/Button'
+import { cn } from '@/lib/utils'
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface Deal {
+  dealId: string
+  portal: string
+  customerName: string
+  submittedDate: string
+  assignedUser: string | null
+  decision: string | null
+  discount: number | null
+  fundingRequirements: string | null
+  status: string
+  lastStatus: string | null
+  statusChangedAt: number | null
+  docsRequestedAt: number | null
+  lastCheckedAt: number | null
+  createdAt: number
+  updatedAt: number
+  saleAmount: number | null
+  dealSource: string | null
+  salesRep: string | null
+  financeAmount: number | null
+  saleDate: string | null
+  pgNotes: string | null
+  pgId: number | null
+}
+
+interface HistoryEntry {
+  id: number
+  dealId: string
+  oldStatus: string | null
+  newStatus: string
+  changedAt: number
+}
+
+interface ComparisonDeal {
+  dealId: string
+  portal: string
+  decision: string | null
+  discount: number | null
+  status: string
+  statusChangedAt: number | null
+  submittedDate: string
+  isBestRate: boolean
+}
+
+interface Comparison {
+  customerName: string
+  portalCount: number
+  bestDealId: string | null
+  deals: ComparisonDeal[]
+}
+
+interface Stats {
+  byPortal: { portal: string; count: number }[]
+  byStatus: { status: string; count: number }[]
+  activeCount: number
+  awaitingDocs: { count: number; oldestAt: number | null }
+  staleDocsCount: number
+  multiSubmitCount: number
+  fundedThisMonth: number
+  avgDiscountByPortal: { portal: string; avgDiscount: number; count: number }[]
+}
+
+interface PaginationInfo {
+  page: number
+  limit: number
+  total: number
+  pages: number
+}
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const PORTALS = ['All', 'ISPC', 'Foundation', 'Synchrony', 'Aqua']
+
+const STATUSES = [
+  'All',
+  'CRD: Review Pending',
+  'CRD: In Review',
+  'Under Review',
+  'Approved',
+  'Declined',
+  'Awaiting Docs',
+  'Documents Received',
+  'Care Call Pending',
+  'Fund Me',
+  'Funding Pending',
+  'Funded',
+  'Application on Hold',
+  'Funding On Hold',
+]
+
+const PORTAL_COLORS: Record<string, string> = {
+  ispc:       'bg-blue-900/60 text-blue-300 border-blue-700',
+  foundation: 'bg-emerald-900/60 text-emerald-300 border-emerald-700',
+  synchrony:  'bg-purple-900/60 text-purple-300 border-purple-700',
+  aqua:       'bg-amber-900/60 text-amber-300 border-amber-700',
+}
+
+const STATUS_COLORS: Record<string, string> = {
+  'Approved':              'text-emerald-400',
+  'Funded':                'text-emerald-300',
+  'Fund Me':               'text-emerald-400',
+  'Funding Pending':       'text-emerald-400',
+  'Declined':              'text-red-400',
+  'Application on Hold':   'text-red-300',
+  'Funding On Hold':       'text-red-300',
+  'Awaiting Docs':         'text-amber-400',
+  'Documents Received':    'text-blue-400',
+  'CRD: Review Pending':   'text-slate-400',
+  'CRD: In Review':        'text-blue-400',
+  'Under Review':          'text-blue-400',
+  'Care Call Pending':     'text-violet-400',
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function portalBadgeClass(portal: string) {
+  return PORTAL_COLORS[portal?.toLowerCase()] ?? 'bg-slate-800 text-slate-300 border-slate-700'
+}
+
+function statusColor(status: string) {
+  return STATUS_COLORS[status] ?? 'text-slate-400'
+}
+
+function timeAgo(epochSec: number | null): string {
+  if (!epochSec) return '—'
+  const diffMs = Date.now() - epochSec * 1000
+  const mins = Math.floor(diffMs / 60000)
+  if (mins < 1)  return 'just now'
+  if (mins < 60) return `${mins}m`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24)  return `${hrs}h`
+  const days = Math.floor(hrs / 24)
+  return `${days}d`
+}
+
+function fmtDate(dateStr: string | null | undefined): string {
+  if (!dateStr) return '—'
+  const d = new Date(dateStr)
+  if (isNaN(d.getTime())) return dateStr
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
+function fmtRate(discount: number | null): string {
+  if (discount == null) return '—'
+  return `${discount.toFixed(1)}%`
+}
+
+function fmtCurrency(n: number | null): string {
+  if (n == null) return '—'
+  return `$${Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+}
+
+// ─── Sub-components ──────────────────────────────────────────────────────────
+
+function StatCard({ icon: Icon, label, value, sub, color = 'text-slate-200' }: {
+  icon: React.ElementType
+  label: string
+  value: string | number
+  sub?: string
+  color?: string
+}) {
+  return (
+    <Card className="flex-1 min-w-0">
+      <CardContent className="py-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs text-slate-500 mb-1">{label}</p>
+            <p className={cn('text-2xl font-bold', color)}>{value}</p>
+            {sub && <p className="text-xs text-slate-500 mt-0.5">{sub}</p>}
+          </div>
+          <div className="p-2 rounded-lg bg-slate-800 flex-shrink-0">
+            <Icon className="w-4 h-4 text-slate-400" />
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function PortalBadge({ portal }: { portal: string }) {
+  return (
+    <span className={cn(
+      'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border',
+      portalBadgeClass(portal)
+    )}>
+      {portal}
+    </span>
+  )
+}
+
+function DecisionBadge({ decision }: { decision: string | null }) {
+  if (!decision) return <span className="text-slate-500 text-xs">—</span>
+  if (decision === 'Approved') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-emerald-900/60 text-emerald-300 border border-emerald-700">
+        <CheckCircle2 className="w-3 h-3" /> Approved
+      </span>
+    )
+  }
+  if (decision === 'Declined') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-red-900/60 text-red-300 border border-red-700">
+        <XCircle className="w-3 h-3" /> Declined
+      </span>
+    )
+  }
+  return <span className="text-slate-400 text-xs">{decision}</span>
+}
+
+function ComparisonCard({ comparisons, dealId }: { comparisons: Comparison[]; dealId: string }) {
+  const match = comparisons.find(c => c.deals.some(d => d.dealId === dealId))
+  if (!match || match.portalCount < 2) return null
+
+  return (
+    <div className="mt-3 rounded-lg border border-slate-700 overflow-hidden">
+      <div className="bg-slate-800/60 px-4 py-2 border-b border-slate-700">
+        <span className="text-xs font-semibold text-slate-300 flex items-center gap-2">
+          <BarChart3 className="w-3.5 h-3.5 text-blue-400" />
+          {match.customerName} — Rate Comparison
+        </span>
+      </div>
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="border-b border-slate-700">
+            <th className="text-left px-3 py-2 text-slate-400 font-medium">Portal</th>
+            <th className="text-left px-3 py-2 text-slate-400 font-medium">Decision</th>
+            <th className="text-left px-3 py-2 text-slate-400 font-medium">Rate</th>
+            <th className="text-left px-3 py-2 text-slate-400 font-medium">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {match.deals.map(d => (
+            <tr
+              key={d.dealId}
+              className={cn(
+                'border-b border-slate-700/50 last:border-0',
+                d.isBestRate && 'bg-emerald-950/30'
+              )}
+            >
+              <td className="px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <PortalBadge portal={d.portal} />
+                </div>
+              </td>
+              <td className="px-3 py-2">
+                <DecisionBadge decision={d.decision} />
+              </td>
+              <td className="px-3 py-2">
+                <div className="flex items-center gap-1.5">
+                  <span className={cn(
+                    'font-mono font-semibold',
+                    d.isBestRate ? 'text-emerald-300' : 'text-slate-300'
+                  )}>
+                    {fmtRate(d.discount)}
+                  </span>
+                  {d.isBestRate && (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-900/60 text-emerald-300 border border-emerald-700">
+                      BEST
+                    </span>
+                  )}
+                </div>
+              </td>
+              <td className="px-3 py-2">
+                <span className={statusColor(d.status)}>{d.status}</span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function HistoryTimeline({ history }: { history: HistoryEntry[] }) {
+  if (history.length === 0) {
+    return <p className="text-xs text-slate-500 italic mt-2">No status history recorded.</p>
+  }
+
+  return (
+    <div className="mt-3 space-y-0">
+      {history.map((entry, i) => {
+        const isLast = i === history.length - 1
+        const date = new Date(entry.changedAt * 1000)
+        const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+        const timeStr = date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+
+        return (
+          <div key={entry.id} className="flex gap-3">
+            <div className="flex flex-col items-center">
+              <div className={cn(
+                'w-2.5 h-2.5 rounded-full mt-1 flex-shrink-0 border-2',
+                isLast ? 'bg-blue-500 border-blue-400' : 'bg-slate-600 border-slate-500'
+              )} />
+              {!isLast && <div className="w-px flex-1 bg-slate-700 mt-1 mb-0" style={{ minHeight: 16 }} />}
+            </div>
+            <div className="pb-3 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                {entry.oldStatus && (
+                  <>
+                    <span className={cn('text-xs', statusColor(entry.oldStatus))}>{entry.oldStatus}</span>
+                    <span className="text-slate-600 text-xs">→</span>
+                  </>
+                )}
+                <span className={cn('text-xs font-medium', statusColor(entry.newStatus))}>{entry.newStatus}</span>
+              </div>
+              <p className="text-[11px] text-slate-500 mt-0.5">{dateStr} at {timeStr}</p>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function ExpandedRow({ deal, comparisons }: { deal: Deal; comparisons: Comparison[] }) {
+  const [history, setHistory] = useState<HistoryEntry[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    fetch(`/api/deal-tracker/history/${deal.dealId}`)
+      .then(r => r.json())
+      .then(data => {
+        setHistory(data.history || [])
+        setLoading(false)
+      })
+      .catch(() => setLoading(false))
+  }, [deal.dealId])
+
+  return (
+    <div className="px-4 py-3 bg-slate-900/50 border-t border-slate-800">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Left: deal details + history */}
+        <div>
+          <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+            <FileText className="w-3.5 h-3.5" /> Status History
+          </h4>
+          {loading ? (
+            <div className="flex items-center gap-2 text-xs text-slate-500">
+              <RefreshCw className="w-3 h-3 animate-spin" /> Loading…
+            </div>
+          ) : (
+            <HistoryTimeline history={history} />
+          )}
+          {/* Deal metadata */}
+          <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+            {deal.salesRep && (
+              <div>
+                <span className="text-slate-500">Sales Rep: </span>
+                <span className="text-slate-300">{deal.salesRep}</span>
+              </div>
+            )}
+            {deal.saleAmount && (
+              <div>
+                <span className="text-slate-500">Sale Amount: </span>
+                <span className="text-slate-300">{fmtCurrency(deal.saleAmount)}</span>
+              </div>
+            )}
+            {deal.financeAmount && (
+              <div>
+                <span className="text-slate-500">Finance Amount: </span>
+                <span className="text-slate-300">{fmtCurrency(deal.financeAmount)}</span>
+              </div>
+            )}
+            {deal.dealSource && (
+              <div>
+                <span className="text-slate-500">Source: </span>
+                <span className="text-slate-300">{deal.dealSource}</span>
+              </div>
+            )}
+            {deal.assignedUser && (
+              <div>
+                <span className="text-slate-500">Assigned: </span>
+                <span className="text-slate-300">{deal.assignedUser}</span>
+              </div>
+            )}
+            {deal.fundingRequirements && (
+              <div className="col-span-2">
+                <span className="text-slate-500">Funding Req: </span>
+                <span className="text-slate-300">{deal.fundingRequirements}</span>
+              </div>
+            )}
+            {deal.pgNotes && (
+              <div className="col-span-2">
+                <span className="text-slate-500">Notes: </span>
+                <span className="text-slate-300">{deal.pgNotes}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right: comparison card if multi-submitted */}
+        <div>
+          <ComparisonCard comparisons={comparisons} dealId={deal.dealId} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Main Page ────────────────────────────────────────────────────────────────
+
+export function DealTrackerPage() {
+  const [deals, setDeals] = useState<Deal[]>([])
+  const [stats, setStats] = useState<Stats | null>(null)
+  const [comparisons, setComparisons] = useState<Comparison[]>([])
+  const [pagination, setPagination] = useState<PaginationInfo>({ page: 1, limit: 50, total: 0, pages: 0 })
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  // Filters
+  const [portalFilter, setPortalFilter] = useState('All')
+  const [statusFilter, setStatusFilter] = useState('All')
+  const [search, setSearch] = useState('')
+  const [searchInput, setSearchInput] = useState('')
+
+  // UI state
+  const [expandedDeal, setExpandedDeal] = useState<string | null>(null)
+  const [autoRefresh, setAutoRefresh] = useState(false)
+  const [showStaleOnly, setShowStaleOnly] = useState(false)
+
+  const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const fetchDeals = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const params = new URLSearchParams({ page: '1', limit: '50' })
+      if (portalFilter !== 'All') params.set('portal', portalFilter)
+      if (statusFilter !== 'All') params.set('status', statusFilter)
+      if (search) params.set('search', search)
+      if (showStaleOnly) params.set('status', 'Awaiting Docs')
+
+      const [dealsRes, statsRes, compRes] = await Promise.all([
+        fetch(`/api/deal-tracker/deals?${params}`),
+        fetch('/api/deal-tracker/stats'),
+        fetch('/api/deal-tracker/comparison'),
+      ])
+
+      if (!dealsRes.ok) throw new Error(`Deals API error: ${dealsRes.status}`)
+
+      const dealsData = await dealsRes.json()
+      const statsData = statsRes.ok ? await statsRes.json() : null
+      const compData = compRes.ok ? await compRes.json() : { comparisons: [] }
+
+      setDeals(dealsData.deals || [])
+      setPagination(dealsData.pagination || { page: 1, limit: 50, total: 0, pages: 0 })
+      setStats(statsData)
+      setComparisons(compData.comparisons || [])
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [portalFilter, statusFilter, search, showStaleOnly])
+
+  useEffect(() => {
+    fetchDeals()
+  }, [fetchDeals])
+
+  useEffect(() => {
+    if (autoRefresh) {
+      autoRefreshRef.current = setInterval(fetchDeals, 30000)
+    } else {
+      if (autoRefreshRef.current) clearInterval(autoRefreshRef.current)
+    }
+    return () => { if (autoRefreshRef.current) clearInterval(autoRefreshRef.current) }
+  }, [autoRefresh, fetchDeals])
+
+  // Debounce search input
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(searchInput), 400)
+    return () => clearTimeout(t)
+  }, [searchInput])
+
+  // Stale docs alert
+  const staleCount = stats?.staleDocsCount ?? 0
+  const oldestDocsAge = stats?.awaitingDocs?.oldestAt
+    ? timeAgo(stats.awaitingDocs.oldestAt)
+    : null
+
+  const toggleExpand = (dealId: string) => {
+    setExpandedDeal(prev => prev === dealId ? null : dealId)
+  }
+
+  return (
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-3">
+          <div className="p-2 rounded-lg bg-blue-600/20 border border-blue-700/50">
+            <TrendingUp className="w-5 h-5 text-blue-400" />
+          </div>
+          <div>
+            <h1 className="text-xl font-bold text-slate-100">Deal Tracker</h1>
+            <p className="text-xs text-slate-500 mt-0.5">Finance portal submissions & rate comparisons</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setAutoRefresh(v => !v)}
+            className={cn(
+              'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium border transition-colors',
+              autoRefresh
+                ? 'bg-blue-600/20 text-blue-300 border-blue-700/50'
+                : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-slate-200'
+            )}
+          >
+            <Clock className="w-3.5 h-3.5" />
+            {autoRefresh ? 'Auto (30s)' : 'Auto-refresh'}
+          </button>
+          <Button
+            onClick={fetchDeals}
+            disabled={loading}
+            variant="secondary"
+            size="sm"
+          >
+            <RefreshCw className={cn('w-3.5 h-3.5 mr-1.5', loading && 'animate-spin')} />
+            Refresh
+          </Button>
+        </div>
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="flex items-center gap-2 p-3 rounded-lg bg-red-950/40 border border-red-800/50 text-red-300 text-sm">
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          {error}
+        </div>
+      )}
+
+      {/* Stale Docs Banner */}
+      {staleCount > 0 && (
+        <div className={cn(
+          'flex items-center justify-between gap-3 px-4 py-3 rounded-lg border',
+          'bg-amber-950/40 border-amber-800/50'
+        )}>
+          <div className="flex items-center gap-2 text-amber-300 text-sm">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            <span>
+              ⚠️ <strong>{staleCount}</strong> deal{staleCount !== 1 ? 's' : ''} waiting on signatures for 12+ hours
+              {oldestDocsAge && <span className="text-amber-400/70"> (oldest: {oldestDocsAge})</span>}
+            </span>
+          </div>
+          <button
+            onClick={() => {
+              setStatusFilter('Awaiting Docs')
+              setShowStaleOnly(true)
+            }}
+            className="text-xs px-3 py-1 rounded-md bg-amber-800/40 border border-amber-700/50 text-amber-300 hover:bg-amber-800/60 transition-colors flex-shrink-0"
+          >
+            View Stale Deals
+          </button>
+        </div>
+      )}
+
+      {/* Stats Row */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <StatCard
+          icon={BarChart3}
+          label="Active Deals"
+          value={stats?.activeCount ?? '—'}
+          sub="Excluding Funded/Declined"
+          color="text-blue-300"
+        />
+        <StatCard
+          icon={Clock}
+          label="Awaiting Docs"
+          value={stats?.awaitingDocs?.count ?? '—'}
+          sub={oldestDocsAge ? `Oldest: ${oldestDocsAge} ago` : undefined}
+          color={staleCount > 0 ? 'text-amber-300' : 'text-slate-200'}
+        />
+        <StatCard
+          icon={CheckCircle2}
+          label="Funded This Month"
+          value={stats?.fundedThisMonth ?? '—'}
+          color="text-emerald-300"
+        />
+        <StatCard
+          icon={Users}
+          label="Multi-Submit"
+          value={stats?.multiSubmitCount ?? '—'}
+          sub="Deals at 2+ companies"
+          color="text-purple-300"
+        />
+      </div>
+
+      {/* Filter Bar */}
+      <Card>
+        <CardContent className="py-3">
+          <div className="flex flex-wrap gap-3 items-center">
+            <div className="flex items-center gap-1.5 text-slate-400">
+              <Filter className="w-3.5 h-3.5" />
+              <span className="text-xs font-medium">Filters</span>
+            </div>
+
+            {/* Portal */}
+            <select
+              value={portalFilter}
+              onChange={e => { setPortalFilter(e.target.value); setShowStaleOnly(false) }}
+              className="bg-slate-800 border border-slate-700 rounded-md text-sm text-slate-300 px-3 py-1.5 focus:outline-none focus:border-blue-600"
+            >
+              {PORTALS.map(p => <option key={p} value={p}>{p === 'All' ? 'All Portals' : p}</option>)}
+            </select>
+
+            {/* Status */}
+            <select
+              value={statusFilter}
+              onChange={e => { setStatusFilter(e.target.value); setShowStaleOnly(false) }}
+              className="bg-slate-800 border border-slate-700 rounded-md text-sm text-slate-300 px-3 py-1.5 focus:outline-none focus:border-blue-600"
+            >
+              {STATUSES.map(s => <option key={s} value={s}>{s === 'All' ? 'All Statuses' : s}</option>)}
+            </select>
+
+            {/* Search */}
+            <div className="relative flex-1 min-w-[160px] max-w-xs">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500 pointer-events-none" />
+              <input
+                type="text"
+                placeholder="Search customer…"
+                value={searchInput}
+                onChange={e => setSearchInput(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-md text-sm text-slate-300 pl-8 pr-3 py-1.5 focus:outline-none focus:border-blue-600 placeholder:text-slate-600"
+              />
+            </div>
+
+            {/* Active filter chips */}
+            {(portalFilter !== 'All' || statusFilter !== 'All' || search || showStaleOnly) && (
+              <button
+                onClick={() => {
+                  setPortalFilter('All')
+                  setStatusFilter('All')
+                  setSearch('')
+                  setSearchInput('')
+                  setShowStaleOnly(false)
+                }}
+                className="text-xs text-slate-400 hover:text-slate-200 underline"
+              >
+                Clear filters
+              </button>
+            )}
+
+            <div className="ml-auto text-xs text-slate-500">
+              {pagination.total} deal{pagination.total !== 1 ? 's' : ''}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Main Table */}
+      <Card>
+        <CardHeader>
+          <CardTitle>
+            <TrendingUp className="w-4 h-4 text-blue-400" />
+            Deals
+          </CardTitle>
+          <span className="text-xs text-slate-500">
+            {loading ? 'Loading…' : `${pagination.total} total`}
+          </span>
+        </CardHeader>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-800">
+                <th className="text-left px-5 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Customer</th>
+                <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Submitted</th>
+                <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Portal</th>
+                <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Decision</th>
+                <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Buy Rate</th>
+                <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Status</th>
+                <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">In Status</th>
+                <th className="px-3 py-3 w-8"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading && deals.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-5 py-10 text-center text-slate-500 text-sm">
+                    <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2" />
+                    Loading deals…
+                  </td>
+                </tr>
+              ) : deals.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-5 py-10 text-center text-slate-500 text-sm">
+                    No deals found
+                  </td>
+                </tr>
+              ) : (
+                deals.map(deal => {
+                  const isExpanded = expandedDeal === deal.dealId
+                  const isMulti = comparisons.some(c => c.deals.some(d => d.dealId === deal.dealId) && c.portalCount > 1)
+
+                  return (
+                    <>
+                      <tr
+                        key={deal.dealId}
+                        onClick={() => toggleExpand(deal.dealId)}
+                        className={cn(
+                          'border-b border-slate-800/50 cursor-pointer transition-colors',
+                          isExpanded ? 'bg-slate-800/40' : 'hover:bg-slate-800/30'
+                        )}
+                      >
+                        {/* Customer Name */}
+                        <td className="px-5 py-3">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-slate-200 whitespace-nowrap">
+                              {deal.customerName}
+                            </span>
+                            {isMulti && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-900/60 text-purple-300 border border-purple-700">
+                                MULTI
+                              </span>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* Submitted Date */}
+                        <td className="px-3 py-3 text-slate-400 text-xs whitespace-nowrap">
+                          {fmtDate(deal.submittedDate)}
+                        </td>
+
+                        {/* Portal */}
+                        <td className="px-3 py-3">
+                          <PortalBadge portal={deal.portal} />
+                        </td>
+
+                        {/* Decision */}
+                        <td className="px-3 py-3">
+                          <DecisionBadge decision={deal.decision} />
+                        </td>
+
+                        {/* Buy Rate */}
+                        <td className="px-3 py-3">
+                          <span className={cn(
+                            'font-mono font-semibold text-sm',
+                            deal.discount != null ? 'text-emerald-300' : 'text-slate-500'
+                          )}>
+                            {fmtRate(deal.discount)}
+                          </span>
+                        </td>
+
+                        {/* Status */}
+                        <td className="px-3 py-3">
+                          <span className={cn('text-xs whitespace-nowrap', statusColor(deal.status))}>
+                            {deal.status}
+                          </span>
+                        </td>
+
+                        {/* Time in Status */}
+                        <td className="px-3 py-3 text-slate-500 text-xs whitespace-nowrap">
+                          {timeAgo(deal.statusChangedAt)}
+                        </td>
+
+                        {/* Expand toggle */}
+                        <td className="px-3 py-3">
+                          {isExpanded
+                            ? <ChevronUp className="w-4 h-4 text-slate-400" />
+                            : <ChevronDown className="w-4 h-4 text-slate-500" />
+                          }
+                        </td>
+                      </tr>
+
+                      {/* Expanded detail row */}
+                      {isExpanded && (
+                        <tr key={`${deal.dealId}-expanded`}>
+                          <td colSpan={8} className="p-0">
+                            <ExpandedRow deal={deal} comparisons={comparisons} />
+                          </td>
+                        </tr>
+                      )}
+                    </>
+                  )
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Pagination */}
+        {pagination.pages > 1 && (
+          <div className="px-5 py-3 border-t border-slate-800 flex items-center justify-between">
+            <span className="text-xs text-slate-500">
+              Page {pagination.page} of {pagination.pages}
+            </span>
+            <div className="flex gap-2">
+              <button
+                disabled={pagination.page <= 1}
+                className="text-xs px-3 py-1 rounded border border-slate-700 text-slate-400 hover:text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Previous
+              </button>
+              <button
+                disabled={pagination.page >= pagination.pages}
+                className="text-xs px-3 py-1 rounded border border-slate-700 text-slate-400 hover:text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
+      </Card>
+    </div>
+  )
+}

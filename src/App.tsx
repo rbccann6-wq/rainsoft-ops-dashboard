@@ -14,6 +14,7 @@ import { FinanceDashboard } from '@/components/finance/FinanceDashboard'
 import { FinanceDocsTab } from '@/components/finance/FinanceDocsTab'
 import { AllLeadsPage } from '@/pages/AllLeadsPage'
 import { PentairOrdersPage } from '@/pages/PentairOrdersPage'
+import { DealTrackerPage } from '@/pages/DealTrackerPage'
 import { mockQuickStats } from '@/data/mock'
 
 export default function App() {
@@ -38,6 +39,7 @@ export default function App() {
               <Route path="/finance-docs" element={<FinanceDocsTab />} />
               <Route path="/all-leads" element={<AllLeadsPage />} />
               <Route path="/orders" element={<PentairOrdersPage />} />
+              <Route path="/deal-tracker" element={<DealTrackerPage />} />
             </Routes>
           </main>
         </div>
