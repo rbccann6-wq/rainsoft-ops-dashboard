@@ -341,4 +341,50 @@ router.post('/deal-tracker/sync', async (req, res) => {
   }
 })
 
+// ── POST /api/deal-tracker/init-db ──────────────────────────────────────────
+// One-time: create tables if they don't exist
+router.post('/deal-tracker/init-db', async (req, res) => {
+  try {
+    const db = getDb()
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS finance_monitor_deals (
+        deal_id             TEXT NOT NULL,
+        portal              TEXT NOT NULL,
+        customer_name       TEXT NOT NULL,
+        submitted_date      TEXT,
+        assigned_user       TEXT,
+        decision            TEXT,
+        discount            NUMERIC(5,2),
+        funding_requirements TEXT,
+        status              TEXT NOT NULL,
+        last_status         TEXT,
+        status_changed_at   TIMESTAMPTZ,
+        docs_requested_at   TIMESTAMPTZ,
+        last_checked_at     TIMESTAMPTZ,
+        created_at          TIMESTAMPTZ DEFAULT NOW(),
+        updated_at          TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (deal_id, portal)
+      );
+
+      CREATE TABLE IF NOT EXISTS finance_monitor_history (
+        id          SERIAL PRIMARY KEY,
+        deal_id     TEXT NOT NULL,
+        portal      TEXT NOT NULL,
+        old_status  TEXT,
+        new_status  TEXT NOT NULL,
+        changed_at  TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_fm_deals_portal ON finance_monitor_deals(portal);
+      CREATE INDEX IF NOT EXISTS idx_fm_deals_status ON finance_monitor_deals(status);
+      CREATE INDEX IF NOT EXISTS idx_fm_deals_customer ON finance_monitor_deals(customer_name);
+      CREATE INDEX IF NOT EXISTS idx_fm_history_deal ON finance_monitor_history(deal_id, portal);
+    `)
+    res.json({ ok: true, message: 'Finance monitor tables created' })
+  } catch (err) {
+    console.error('[DealTracker] init-db error:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
 export default router
