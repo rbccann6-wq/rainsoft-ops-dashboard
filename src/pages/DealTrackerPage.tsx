@@ -196,39 +196,92 @@ function effectiveRate(deal: Deal): number | null {
   return deal.buyRate ?? deal.discount ?? null
 }
 
-/** Normalize customer name for grouping.
- *  Handles portal format differences:
- *    "CHRISTOPHER HAWK" (Foundation) → "HAWK C"
- *    "HAWK, C"          (ISPC)      → "HAWK C"
- *    "HAWK, CHRISTOPHER" (any)      → "HAWK C"
- *  Key = LASTNAME + FIRST_INITIAL (uppercase, single space)
+/** Parse customer name into { last, first, firstInitial } regardless of format.
+ *  "HAWK, C"           → { last: "HAWK", first: "C",           firstInitial: "C" }
+ *  "HAWK, CHRISTOPHER"  → { last: "HAWK", first: "CHRISTOPHER", firstInitial: "C" }
+ *  "CHRISTOPHER HAWK"   → { last: "HAWK", first: "CHRISTOPHER", firstInitial: "C" }
  */
-function normName(name: string): string {
+function parseName(name: string): { last: string; first: string; firstInitial: string } {
   const clean = name.trim().toUpperCase().replace(/\s+/g, ' ')
   // "LAST, FIRST" or "LAST, F" format
-  const commaMatch = clean.match(/^([A-Z'-]+)\s*,\s*([A-Z])/)
-  if (commaMatch) return `${commaMatch[1]} ${commaMatch[2]}`
-  // "FIRST LAST" format — take last word as surname, first char of first word
+  const commaMatch = clean.match(/^([A-Z'-]+)\s*,\s*(.+)$/)
+  if (commaMatch) {
+    const last = commaMatch[1]
+    const first = commaMatch[2].trim()
+    return { last, first, firstInitial: first[0] || '' }
+  }
+  // "FIRST LAST" or "FIRST MIDDLE LAST" format
   const parts = clean.split(' ').filter(Boolean)
   if (parts.length >= 2) {
     const last = parts[parts.length - 1]
-    const firstInitial = parts[0][0]
-    return `${last} ${firstInitial}`
+    const first = parts.slice(0, -1).join(' ')
+    return { last, first, firstInitial: parts[0][0] || '' }
   }
-  return clean
+  return { last: clean, first: '', firstInitial: '' }
 }
 
-/** Group deals by customer, compute best rate per group */
-function groupByCustomer(deals: Deal[]): CustomerGroup[] {
-  const map = new Map<string, Deal[]>()
-  for (const deal of deals) {
-    const key = normName(deal.customerName)
-    if (!map.has(key)) map.set(key, [])
-    map.get(key)!.push(deal)
+/** Check if two deals likely belong to the same customer.
+ *  Match on: last name + first initial (required) + address or amount confirmation.
+ *  If address is available on both → must match (street number + street name).
+ *  If no address → finance amounts must be within 10% of each other.
+ *  Fallback: if only last + initial match AND same state → group them.
+ */
+function isSameCustomer(a: Deal, b: Deal): boolean {
+  const nameA = parseName(a.customerName)
+  const nameB = parseName(b.customerName)
+
+  // Last name must match exactly
+  if (nameA.last !== nameB.last) return false
+  // First initial must match
+  if (nameA.firstInitial !== nameB.firstInitial) return false
+
+  // Strong match: address overlap (normalize and compare street number + name)
+  const addrA = a.address?.trim().toUpperCase().replace(/\s+/g, ' ')
+  const addrB = b.address?.trim().toUpperCase().replace(/\s+/g, ' ')
+  if (addrA && addrB) {
+    // Extract street number + first word of street name
+    const streetA = addrA.match(/^(\d+\s+\S+)/)
+    const streetB = addrB.match(/^(\d+\s+\S+)/)
+    if (streetA && streetB) return streetA[1] === streetB[1]
+    return addrA === addrB
   }
 
-  const groups: CustomerGroup[] = []
-  for (const [, groupDeals] of map) {
+  // Medium match: finance amount within 10%
+  if (a.financeAmount && b.financeAmount) {
+    const ratio = Math.min(a.financeAmount, b.financeAmount) / Math.max(a.financeAmount, b.financeAmount)
+    if (ratio >= 0.9) return true
+  }
+
+  // Weak match: same state confirms it (if available)
+  if (a.state && b.state && a.state.toUpperCase() === b.state.toUpperCase()) return true
+
+  // Last resort: last name + first initial match with no conflicting data → group
+  // This catches cases like "HAWK, C" (ISPC, no address) + "CHRISTOPHER HAWK" (Foundation)
+  return true
+}
+
+/** Group deals by customer using fuzzy matching, compute best rate per group */
+function groupByCustomer(deals: Deal[]): CustomerGroup[] {
+  // Build groups using union-find style matching
+  const groups: Deal[][] = []
+
+  for (const deal of deals) {
+    let matched = false
+    for (const group of groups) {
+      // Check against first deal in group (representative)
+      if (isSameCustomer(group[0], deal)) {
+        group.push(deal)
+        matched = true
+        break
+      }
+    }
+    if (!matched) {
+      groups.push([deal])
+    }
+  }
+
+  const result: CustomerGroup[] = []
+  for (const groupDeals of groups) {
     // Sort: active first, then by date desc
     groupDeals.sort((a, b) => {
       const aActive = !['Funded', 'Declined', 'Cancelled', 'No Available Offer Found'].includes(a.status)
@@ -265,7 +318,7 @@ function groupByCustomer(deals: Deal[]): CustomerGroup[] {
       b.customerName.length > a.customerName.length ? b : a
     ).customerName
 
-    groups.push({
+    result.push({
       name: displayName,
       deals: groupDeals,
       portals,
@@ -277,14 +330,14 @@ function groupByCustomer(deals: Deal[]): CustomerGroup[] {
   }
 
   // Sort groups: active first, then by most recent submission
-  groups.sort((a, b) => {
+  result.sort((a, b) => {
     if (a.hasActive !== b.hasActive) return a.hasActive ? -1 : 1
     const aDate = a.deals[0]?.submittedDate || ''
     const bDate = b.deals[0]?.submittedDate || ''
     return bDate.localeCompare(aDate)
   })
 
-  return groups
+  return result
 }
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
@@ -1008,10 +1061,10 @@ export function DealTrackerPage() {
           ) : (
             <>
               <div className="text-xs text-slate-500">
-                {deals.length} deals across {new Set(deals.map(d => normName(d.customerName))).size} customers
+                {deals.length} deals across {groupByCustomer(deals).length} customers
               </div>
               {groupByCustomer(deals).map(group => (
-                <CustomerGroupCard key={normName(group.name)} group={group} comparisons={comparisons} />
+                <CustomerGroupCard key={group.deals.map(d => d.dealId).join('+')} group={group} comparisons={comparisons} />
               ))}
             </>
           )}
