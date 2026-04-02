@@ -39,6 +39,10 @@ interface Deal {
   rescindDate: string | null
   state: string | null
   address: string | null
+  phone: string | null
+  city: string | null
+  zip: string | null
+  email: string | null
   saleDate: string | null
   pgNotes: string | null
   pgId: number | null
@@ -235,6 +239,13 @@ function isSameCustomer(a: Deal, b: Deal): boolean {
   // First initial must match
   if (nameA.firstInitial !== nameB.firstInitial) return false
 
+  // Strongest match: phone number (strip non-digits, compare last 10)
+  const phoneA = a.phone?.replace(/\D/g, '').slice(-10)
+  const phoneB = b.phone?.replace(/\D/g, '').slice(-10)
+  if (phoneA && phoneB && phoneA.length === 10 && phoneB.length === 10) {
+    return phoneA === phoneB // Same phone = same person, different phone = different person
+  }
+
   // Strong match: address overlap (normalize and compare street number + name)
   const addrA = a.address?.trim().toUpperCase().replace(/\s+/g, ' ')
   const addrB = b.address?.trim().toUpperCase().replace(/\s+/g, ' ')
@@ -255,8 +266,10 @@ function isSameCustomer(a: Deal, b: Deal): boolean {
   // Weak match: same state confirms it (if available)
   if (a.state && b.state && a.state.toUpperCase() === b.state.toUpperCase()) return true
 
-  // Last resort: last name + first initial match with no conflicting data → group
-  // This catches cases like "HAWK, C" (ISPC, no address) + "CHRISTOPHER HAWK" (Foundation)
+  // Last resort: last name + first initial match but NO confirming data at all
+  // Be conservative — only group if no conflicting signals exist
+  // If both have addresses and they don't match → already returned false above
+  // If one has no data at all → likely same person (ISPC before app fetch)
   return true
 }
 

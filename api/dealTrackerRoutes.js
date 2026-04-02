@@ -42,6 +42,10 @@ function toCamel(row) {
     rescindDate: row.rescind_date,
     state: row.state,
     address: row.address,
+    phone: row.phone,
+    city: row.city,
+    zip: row.zip,
+    email: row.email,
     isMultiSubmit: row.isMultiSubmit || false,
   }
 }
@@ -362,14 +366,16 @@ router.post('/deal-tracker/sync', async (req, res) => {
           INSERT INTO finance_monitor_deals 
             (deal_id, portal, customer_name, coapplicant, submitted_date, assigned_user, decision, discount,
              funding_requirements, status, docs_requested_at, last_checked_at, created_at, updated_at,
-             finance_amount, buy_rate, tier, reference_number, option_code, exp_date, funding_date, rescind_date, state, address)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+             finance_amount, buy_rate, tier, reference_number, option_code, exp_date, funding_date, rescind_date,
+             state, address, phone, city, zip, email)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
         `, [
           deal.dealId, portal, deal.customerName, deal.coapplicant, deal.submittedDate,
           deal.assignedUser, deal.decision, deal.discount,
           deal.fundingRequirements, deal.status, docsRequestedAt, now, now, now,
           deal.financeAmount, deal.buyRate, deal.tier, deal.referenceNumber, deal.optionCode,
           deal.expDate, deal.fundingDate, deal.rescindDate, deal.state, deal.address,
+          deal.phone, deal.city, deal.zip, deal.email,
         ])
         newCount++
       } else {
@@ -390,14 +396,16 @@ router.post('/deal-tracker/sync', async (req, res) => {
               status = $8, last_status = $9, status_changed_at = $10,
               docs_requested_at = $11, last_checked_at = $12, updated_at = $13,
               finance_amount = $14, buy_rate = $15, tier = $16, reference_number = $17, option_code = $18,
-              exp_date = $19, funding_date = $20, rescind_date = $21, state = $22, address = $23
-            WHERE deal_id = $24 AND portal = $25
+              exp_date = $19, funding_date = $20, rescind_date = $21, state = $22, address = $23,
+              phone = COALESCE($24, phone), city = COALESCE($25, city), zip = COALESCE($26, zip), email = COALESCE($27, email)
+            WHERE deal_id = $28 AND portal = $29
           `, [
             deal.customerName, deal.coapplicant, deal.submittedDate, deal.assignedUser,
             deal.decision, deal.discount, deal.fundingRequirements,
             deal.status, old.status, now, docsRequestedAt, now, now,
             deal.financeAmount, deal.buyRate, deal.tier, deal.referenceNumber, deal.optionCode,
             deal.expDate, deal.fundingDate, deal.rescindDate, deal.state, deal.address,
+            deal.phone, deal.city, deal.zip, deal.email,
             deal.dealId, portal,
           ])
 
@@ -421,12 +429,14 @@ router.post('/deal-tracker/sync', async (req, res) => {
               last_checked_at = $1, updated_at = $1,
               customer_name = $2, coapplicant = $3, assigned_user = $4, decision = $5, discount = $6,
               finance_amount = $7, buy_rate = $8, tier = $9, reference_number = $10, option_code = $11,
-              exp_date = $12, funding_date = $13, rescind_date = $14, state = $15, address = $16
-            WHERE deal_id = $17 AND portal = $18
+              exp_date = $12, funding_date = $13, rescind_date = $14, state = $15, address = $16,
+              phone = COALESCE($17, phone), city = COALESCE($18, city), zip = COALESCE($19, zip), email = COALESCE($20, email)
+            WHERE deal_id = $21 AND portal = $22
           `, [
             now, deal.customerName, deal.coapplicant, deal.assignedUser, deal.decision, deal.discount,
             deal.financeAmount, deal.buyRate, deal.tier, deal.referenceNumber, deal.optionCode,
             deal.expDate, deal.fundingDate, deal.rescindDate, deal.state, deal.address,
+            deal.phone, deal.city, deal.zip, deal.email,
             deal.dealId, portal
           ])
         }
@@ -493,6 +503,10 @@ router.post('/deal-tracker/init-db', async (req, res) => {
       ['rescind_date', 'TEXT'],
       ['state', 'TEXT'],
       ['address', 'TEXT'],
+      ['phone', 'TEXT'],
+      ['city', 'TEXT'],
+      ['zip', 'TEXT'],
+      ['email', 'TEXT'],
     ]
     for (const [col, type] of newCols) {
       await db.query(`
