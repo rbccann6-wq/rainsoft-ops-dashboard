@@ -14,6 +14,7 @@ function toCamel(row) {
     dealId: row.deal_id,
     portal: row.portal,
     customerName: row.customer_name,
+    coapplicant: row.coapplicant,
     submittedDate: row.submitted_date,
     assignedUser: row.assigned_user,
     decision: row.decision,
@@ -30,8 +31,17 @@ function toCamel(row) {
     dealSource: row.deal_source,
     salesRep: row.sales_rep,
     financeAmount: row.finance_amount != null ? parseFloat(row.finance_amount) : null,
+    buyRate: row.buy_rate != null ? parseFloat(row.buy_rate) : null,
+    tier: row.tier,
+    referenceNumber: row.reference_number,
+    optionCode: row.option_code,
     saleDate: row.sale_date,
     dealNotes: row.deal_notes,
+    expDate: row.exp_date,
+    fundingDate: row.funding_date,
+    rescindDate: row.rescind_date,
+    state: row.state,
+    address: row.address,
     isMultiSubmit: row.isMultiSubmit || false,
   }
 }
@@ -322,16 +332,19 @@ router.post('/deal-tracker/sync', async (req, res) => {
 
       if (existing.length === 0) {
         // Insert new deal
-        const docsRequestedAt = deal.status === 'Awaiting Docs' ? now : null
+        const docsRequestedAt = deal.status === 'Awaiting Docs' || deal.status === 'Approved - Need Docs' ? now : null
         await db.query(`
           INSERT INTO finance_monitor_deals 
-            (deal_id, portal, customer_name, submitted_date, assigned_user, decision, discount,
-             funding_requirements, status, docs_requested_at, last_checked_at, created_at, updated_at)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+            (deal_id, portal, customer_name, coapplicant, submitted_date, assigned_user, decision, discount,
+             funding_requirements, status, docs_requested_at, last_checked_at, created_at, updated_at,
+             finance_amount, buy_rate, tier, reference_number, option_code, exp_date, funding_date, rescind_date, state, address)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
         `, [
-          deal.dealId, portal, deal.customerName, deal.submittedDate,
+          deal.dealId, portal, deal.customerName, deal.coapplicant, deal.submittedDate,
           deal.assignedUser, deal.decision, deal.discount,
           deal.fundingRequirements, deal.status, docsRequestedAt, now, now, now,
+          deal.financeAmount, deal.buyRate, deal.tier, deal.referenceNumber, deal.optionCode,
+          deal.expDate, deal.fundingDate, deal.rescindDate, deal.state, deal.address,
         ])
         newCount++
       } else {
@@ -347,15 +360,19 @@ router.post('/deal-tracker/sync', async (req, res) => {
 
           await db.query(`
             UPDATE finance_monitor_deals SET
-              customer_name = $1, submitted_date = $2, assigned_user = $3,
-              decision = $4, discount = $5, funding_requirements = $6,
-              status = $7, last_status = $8, status_changed_at = $9,
-              docs_requested_at = $10, last_checked_at = $11, updated_at = $12
-            WHERE deal_id = $13 AND portal = $14
+              customer_name = $1, coapplicant = $2, submitted_date = $3, assigned_user = $4,
+              decision = $5, discount = $6, funding_requirements = $7,
+              status = $8, last_status = $9, status_changed_at = $10,
+              docs_requested_at = $11, last_checked_at = $12, updated_at = $13,
+              finance_amount = $14, buy_rate = $15, tier = $16, reference_number = $17, option_code = $18,
+              exp_date = $19, funding_date = $20, rescind_date = $21, state = $22, address = $23
+            WHERE deal_id = $24 AND portal = $25
           `, [
-            deal.customerName, deal.submittedDate, deal.assignedUser,
+            deal.customerName, deal.coapplicant, deal.submittedDate, deal.assignedUser,
             deal.decision, deal.discount, deal.fundingRequirements,
             deal.status, old.status, now, docsRequestedAt, now, now,
+            deal.financeAmount, deal.buyRate, deal.tier, deal.referenceNumber, deal.optionCode,
+            deal.expDate, deal.fundingDate, deal.rescindDate, deal.state, deal.address,
             deal.dealId, portal,
           ])
 
@@ -373,13 +390,20 @@ router.post('/deal-tracker/sync', async (req, res) => {
             newStatus: deal.status,
           })
         } else {
-          // No status change, just update last_checked
+          // No status change, just update fields
           await db.query(`
             UPDATE finance_monitor_deals SET 
               last_checked_at = $1, updated_at = $1,
-              customer_name = $2, assigned_user = $3, decision = $4, discount = $5
-            WHERE deal_id = $6 AND portal = $7
-          `, [now, deal.customerName, deal.assignedUser, deal.decision, deal.discount, deal.dealId, portal])
+              customer_name = $2, coapplicant = $3, assigned_user = $4, decision = $5, discount = $6,
+              finance_amount = $7, buy_rate = $8, tier = $9, reference_number = $10, option_code = $11,
+              exp_date = $12, funding_date = $13, rescind_date = $14, state = $15, address = $16
+            WHERE deal_id = $17 AND portal = $18
+          `, [
+            now, deal.customerName, deal.coapplicant, deal.assignedUser, deal.decision, deal.discount,
+            deal.financeAmount, deal.buyRate, deal.tier, deal.referenceNumber, deal.optionCode,
+            deal.expDate, deal.fundingDate, deal.rescindDate, deal.state, deal.address,
+            deal.dealId, portal
+          ])
         }
       }
     }

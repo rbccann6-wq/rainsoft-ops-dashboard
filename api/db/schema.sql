@@ -328,6 +328,7 @@ CREATE TABLE IF NOT EXISTS finance_monitor_deals (
   deal_id             TEXT NOT NULL,
   portal              TEXT NOT NULL,
   customer_name       TEXT NOT NULL,
+  coapplicant         TEXT,
   submitted_date      TEXT,
   assigned_user       TEXT,
   decision            TEXT,
@@ -340,6 +341,16 @@ CREATE TABLE IF NOT EXISTS finance_monitor_deals (
   last_checked_at     TIMESTAMPTZ,
   created_at          TIMESTAMPTZ DEFAULT NOW(),
   updated_at          TIMESTAMPTZ DEFAULT NOW(),
+  finance_amount      NUMERIC(10,2),
+  buy_rate            NUMERIC(5,2),
+  tier                INTEGER,
+  reference_number    TEXT,
+  option_code         TEXT,
+  exp_date            TEXT,
+  funding_date        TEXT,
+  rescind_date        TEXT,
+  state               TEXT,
+  address             TEXT,
   PRIMARY KEY (deal_id, portal)
 );
 
