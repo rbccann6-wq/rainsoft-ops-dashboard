@@ -1,325 +1,342 @@
+/**
+ * Deal Tracker Routes — Finance portal deal status monitoring
+ * Reads from PostgreSQL finance_monitor_deals + finance_monitor_history tables
+ */
 import express from 'express'
-import { createRequire } from 'module'
-import { fileURLToPath } from 'url'
-import { dirname, join } from 'path'
-import os from 'os'
-import db from './db/index.js'
+import { getDb } from './db/index.js'
 
-const require = createRequire(import.meta.url)
 const router = express.Router()
 
-// Path to the finance-monitor SQLite DB
-const SQLITE_DB_PATH = join(os.homedir(), 'Projects', 'finance-monitor', 'data', 'deals.db')
-
-function getSqliteDb() {
-  try {
-    const Database = require('better-sqlite3')
-    return new Database(SQLITE_DB_PATH, { readonly: true })
-  } catch (err) {
-    console.error('[DealTracker] Failed to open SQLite DB:', err.message)
-    return null
-  }
-}
-
-// Helper: normalize customer name for matching (uppercase, trim)
-function normalizeName(name) {
-  if (!name) return ''
-  return name.trim().toUpperCase()
-}
-
-// GET /api/deal-tracker/deals
-// Query params: portal, status, search, page, limit
+// ── GET /api/deal-tracker/deals ─────────────────────────────────────────────
 router.get('/deal-tracker/deals', async (req, res) => {
   try {
+    const db = getDb()
     const { portal, status, search, page = 1, limit = 50 } = req.query
     const offset = (parseInt(page) - 1) * parseInt(limit)
 
-    const sqlite = getSqliteDb()
-    if (!sqlite) {
-      return res.status(503).json({ error: 'Finance monitor database unavailable' })
-    }
-
-    // Build SQLite query
-    let sqliteQuery = 'SELECT * FROM deals WHERE 1=1'
-    const sqliteParams = []
+    let where = []
+    let params = []
+    let paramIdx = 1
 
     if (portal) {
-      sqliteQuery += ' AND LOWER(portal) = LOWER(?)'
-      sqliteParams.push(portal)
+      where.push(`fm.portal = $${paramIdx++}`)
+      params.push(portal.toLowerCase())
     }
     if (status) {
-      sqliteQuery += ' AND status = ?'
-      sqliteParams.push(status)
+      where.push(`fm.status = $${paramIdx++}`)
+      params.push(status)
     }
     if (search) {
-      sqliteQuery += ' AND LOWER(customerName) LIKE LOWER(?)'
-      sqliteParams.push(`%${search}%`)
+      where.push(`LOWER(fm.customer_name) LIKE $${paramIdx++}`)
+      params.push(`%${search.toLowerCase()}%`)
     }
 
-    sqliteQuery += ' ORDER BY createdAt DESC LIMIT ? OFFSET ?'
-    sqliteParams.push(parseInt(limit), offset)
+    const whereClause = where.length > 0 ? 'WHERE ' + where.join(' AND ') : ''
 
-    const sqliteDeals = sqlite.prepare(sqliteQuery).all(...sqliteParams)
-    sqlite.close()
+    // Get deals with optional join to main deals table for extra info
+    const query = `
+      SELECT 
+        fm.*,
+        d.sale_amount,
+        d.deal_source,
+        d.sales_rep,
+        d.finance_amount,
+        d.sale_date,
+        d.notes as deal_notes
+      FROM finance_monitor_deals fm
+      LEFT JOIN deals d ON UPPER(TRIM(d.customer_name)) = UPPER(TRIM(fm.customer_name))
+        AND LOWER(d.finance_company) = LOWER(fm.portal)
+      ${whereClause}
+      ORDER BY fm.updated_at DESC
+      LIMIT $${paramIdx++} OFFSET $${paramIdx++}
+    `
+    params.push(parseInt(limit), offset)
 
-    // Count query for pagination
-    const sqlite2 = getSqliteDb()
-    let countQuery = 'SELECT COUNT(*) as total FROM deals WHERE 1=1'
-    const countParams = []
-    if (portal) { countQuery += ' AND LOWER(portal) = LOWER(?)'; countParams.push(portal) }
-    if (status) { countQuery += ' AND status = ?'; countParams.push(status) }
-    if (search)  { countQuery += ' AND LOWER(customerName) LIKE LOWER(?)'; countParams.push(`%${search}%`) }
-    const { total } = sqlite2.prepare(countQuery).get(...countParams)
-    sqlite2.close()
+    const { rows } = await db.query(query, params)
 
-    // Fetch matching PG records by customer name
-    let pgDeals = []
-    if (sqliteDeals.length > 0) {
-      const names = sqliteDeals.map(d => normalizeName(d.customerName)).filter(Boolean)
-      const placeholders = names.map((_, i) => `$${i + 1}`).join(', ')
-      try {
-        const pgResult = await db.query(
-          `SELECT * FROM deals WHERE UPPER(TRIM(customer_name)) IN (${placeholders})`,
-          names
-        )
-        pgDeals = pgResult.rows
-      } catch (pgErr) {
-        console.warn('[DealTracker] PG query failed (non-fatal):', pgErr.message)
-      }
-    }
+    // Get total count
+    const countQuery = `SELECT COUNT(*) FROM finance_monitor_deals fm ${whereClause}`
+    const countParams = params.slice(0, params.length - 2) // remove limit/offset
+    const { rows: countRows } = await db.query(countQuery, countParams)
 
-    // Build PG lookup map by normalized name
-    const pgMap = {}
-    for (const row of pgDeals) {
-      const key = normalizeName(row.customer_name)
-      if (!pgMap[key]) pgMap[key] = []
-      pgMap[key].push(row)
-    }
+    // Check which customers have multi-portal submissions
+    const multiQuery = `
+      SELECT customer_name FROM finance_monitor_deals
+      GROUP BY customer_name HAVING COUNT(DISTINCT portal) > 1
+    `
+    const { rows: multiRows } = await db.query(multiQuery)
+    const multiCustomers = new Set(multiRows.map(r => r.customer_name))
 
-    // Merge SQLite + PG data
-    const merged = sqliteDeals.map(deal => {
-      const key = normalizeName(deal.customerName)
-      const pgMatches = pgMap[key] || []
-      const pgDeal = pgMatches[0] || null
-
-      return {
-        // SQLite fields
-        dealId: deal.dealId,
-        portal: deal.portal,
-        customerName: deal.customerName,
-        submittedDate: deal.submittedDate,
-        assignedUser: deal.assignedUser,
-        decision: deal.decision,
-        discount: deal.discount,
-        fundingRequirements: deal.fundingRequirements,
-        status: deal.status,
-        lastStatus: deal.lastStatus,
-        statusChangedAt: deal.statusChangedAt,
-        docsRequestedAt: deal.docsRequestedAt,
-        lastCheckedAt: deal.lastCheckedAt,
-        createdAt: deal.createdAt,
-        updatedAt: deal.updatedAt,
-        // PG fields (if matched)
-        saleAmount: pgDeal?.sale_amount ?? null,
-        dealSource: pgDeal?.deal_source ?? null,
-        salesRep: pgDeal?.sales_rep ?? null,
-        financeAmount: pgDeal?.finance_amount ?? null,
-        saleDate: pgDeal?.sale_date ?? null,
-        pgNotes: pgDeal?.notes ?? null,
-        pgId: pgDeal?.id ?? null,
-      }
-    })
+    const enriched = rows.map(row => ({
+      ...row,
+      isMultiSubmit: multiCustomers.has(row.customer_name),
+    }))
 
     res.json({
-      deals: merged,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        pages: Math.ceil(total / parseInt(limit)),
-      }
+      deals: enriched,
+      total: parseInt(countRows[0].count),
+      page: parseInt(page),
+      limit: parseInt(limit),
     })
   } catch (err) {
-    console.error('[DealTracker] GET /deals error:', err)
+    console.error('[DealTracker] GET /deals error:', err.message)
     res.status(500).json({ error: err.message })
   }
 })
 
-// GET /api/deal-tracker/comparison
-// Returns deals submitted to multiple finance companies, grouped by customer name
+// ── GET /api/deal-tracker/comparison ────────────────────────────────────────
 router.get('/deal-tracker/comparison', async (req, res) => {
   try {
-    const sqlite = getSqliteDb()
-    if (!sqlite) {
-      return res.status(503).json({ error: 'Finance monitor database unavailable' })
-    }
+    const db = getDb()
 
-    // Get all deals grouped by customer name where count > 1
-    const multiDeals = sqlite.prepare(`
-      SELECT customerName, COUNT(*) as portalCount
-      FROM deals
-      GROUP BY UPPER(TRIM(customerName))
-      HAVING COUNT(*) > 1
-      ORDER BY portalCount DESC
-    `).all()
+    // Find customers with deals in multiple portals
+    const { rows } = await db.query(`
+      SELECT customer_name, portal, decision, discount, status, deal_id, submitted_date,
+             status_changed_at, docs_requested_at
+      FROM finance_monitor_deals
+      WHERE customer_name IN (
+        SELECT customer_name FROM finance_monitor_deals
+        GROUP BY customer_name HAVING COUNT(DISTINCT portal) > 1
+      )
+      ORDER BY customer_name, portal
+    `)
 
-    if (multiDeals.length === 0) {
-      sqlite.close()
-      return res.json({ comparisons: [] })
-    }
-
-    const customerNames = multiDeals.map(r => normalizeName(r.customerName))
-    const placeholders = customerNames.map((_, i) => `?`).join(', ')
-    const allDeals = sqlite.prepare(
-      `SELECT * FROM deals WHERE UPPER(TRIM(customerName)) IN (${placeholders}) ORDER BY customerName, portal`
-    ).all(...customerNames)
-    sqlite.close()
-
-    // Group by normalized customer name
+    // Group by customer
     const grouped = {}
-    for (const deal of allDeals) {
-      const key = normalizeName(deal.customerName)
-      if (!grouped[key]) grouped[key] = { customerName: deal.customerName, deals: [] }
-      grouped[key].deals.push(deal)
+    for (const row of rows) {
+      if (!grouped[row.customer_name]) grouped[row.customer_name] = []
+      grouped[row.customer_name].push(row)
     }
 
-    // For each group, determine best rate (lowest discount = best buy rate)
-    const comparisons = Object.values(grouped).map(group => {
-      const deals = group.deals
-      // Find best approved rate (lowest discount among approved deals)
-      const approvedDeals = deals.filter(d => d.decision === 'Approved' && d.discount != null)
+    // Find best rate per customer (lowest discount among approved)
+    const comparisons = Object.entries(grouped).map(([name, deals]) => {
+      const approved = deals.filter(d => d.decision === 'Approved' && d.discount != null)
       let bestDealId = null
-      if (approvedDeals.length > 0) {
-        const best = approvedDeals.reduce((a, b) => (a.discount < b.discount ? a : b))
-        bestDealId = best.dealId
+      if (approved.length > 0) {
+        const best = approved.reduce((a, b) => (a.discount < b.discount ? a : b))
+        bestDealId = best.deal_id
       }
-
       return {
-        customerName: group.customerName,
-        portalCount: deals.length,
-        bestDealId,
+        customerName: name,
         deals: deals.map(d => ({
-          dealId: d.dealId,
-          portal: d.portal,
-          decision: d.decision,
-          discount: d.discount,
-          status: d.status,
-          statusChangedAt: d.statusChangedAt,
-          submittedDate: d.submittedDate,
-          isBestRate: d.dealId === bestDealId,
-        }))
+          ...d,
+          isBestRate: d.deal_id === bestDealId,
+        })),
       }
     })
 
-    res.json({ comparisons })
+    res.json(comparisons)
   } catch (err) {
-    console.error('[DealTracker] GET /comparison error:', err)
+    console.error('[DealTracker] GET /comparison error:', err.message)
     res.status(500).json({ error: err.message })
   }
 })
 
-// GET /api/deal-tracker/stats
+// ── GET /api/deal-tracker/stats ─────────────────────────────────────────────
 router.get('/deal-tracker/stats', async (req, res) => {
   try {
-    const sqlite = getSqliteDb()
-    if (!sqlite) {
-      return res.status(503).json({ error: 'Finance monitor database unavailable' })
+    const db = getDb()
+
+    const [
+      { rows: totalRows },
+      { rows: portalRows },
+      { rows: statusRows },
+      { rows: activeRows },
+      { rows: awaitingRows },
+      { rows: staleRows },
+      { rows: fundedRows },
+      { rows: multiRows },
+      { rows: avgDiscountRows },
+    ] = await Promise.all([
+      db.query(`SELECT COUNT(*) FROM finance_monitor_deals`),
+      db.query(`SELECT portal, COUNT(*) as count FROM finance_monitor_deals GROUP BY portal`),
+      db.query(`SELECT status, COUNT(*) as count FROM finance_monitor_deals GROUP BY status ORDER BY count DESC`),
+      db.query(`SELECT COUNT(*) FROM finance_monitor_deals WHERE status NOT IN ('Funded', 'Declined')`),
+      db.query(`
+        SELECT COUNT(*) as count, 
+               MIN(docs_requested_at) as oldest
+        FROM finance_monitor_deals WHERE status = 'Awaiting Docs'
+      `),
+      db.query(`
+        SELECT COUNT(*) FROM finance_monitor_deals 
+        WHERE status = 'Awaiting Docs' 
+          AND docs_requested_at IS NOT NULL 
+          AND docs_requested_at < NOW() - INTERVAL '12 hours'
+      `),
+      db.query(`
+        SELECT COUNT(*) FROM finance_monitor_deals 
+        WHERE status = 'Funded' 
+          AND status_changed_at >= date_trunc('month', CURRENT_DATE)
+      `),
+      db.query(`
+        SELECT COUNT(DISTINCT customer_name) FROM (
+          SELECT customer_name FROM finance_monitor_deals
+          GROUP BY customer_name HAVING COUNT(DISTINCT portal) > 1
+        ) sub
+      `),
+      db.query(`
+        SELECT portal, ROUND(AVG(discount), 2) as avg_discount 
+        FROM finance_monitor_deals 
+        WHERE discount IS NOT NULL AND decision = 'Approved'
+        GROUP BY portal
+      `),
+    ])
+
+    // Calculate oldest awaiting docs age
+    let oldestAwaitingHours = null
+    if (awaitingRows[0]?.oldest) {
+      oldestAwaitingHours = Math.round((Date.now() - new Date(awaitingRows[0].oldest).getTime()) / 3600000)
     }
 
-    // Count by portal
-    const byPortal = sqlite.prepare(`
-      SELECT portal, COUNT(*) as count FROM deals GROUP BY portal ORDER BY count DESC
-    `).all()
-
-    // Count by status
-    const byStatus = sqlite.prepare(`
-      SELECT status, COUNT(*) as count FROM deals GROUP BY status ORDER BY count DESC
-    `).all()
-
-    // Active deals (not Funded or Declined)
-    const activeCount = sqlite.prepare(`
-      SELECT COUNT(*) as count FROM deals WHERE status NOT IN ('Funded', 'Declined', 'Funding On Hold')
-    `).get()
-
-    // Awaiting docs
-    const awaitingDocs = sqlite.prepare(`
-      SELECT COUNT(*) as count, MIN(docsRequestedAt) as oldestAt
-      FROM deals WHERE status = 'Awaiting Docs'
-    `).get()
-
-    // Stale docs (12+ hours)
-    const twelveHoursAgo = Math.floor(Date.now() / 1000) - (12 * 60 * 60)
-    const staleDocs = sqlite.prepare(`
-      SELECT COUNT(*) as count FROM deals
-      WHERE status = 'Awaiting Docs' AND docsRequestedAt IS NOT NULL AND docsRequestedAt < ?
-    `).get(twelveHoursAgo)
-
-    // Multi-submit comparisons
-    const multiSubmit = sqlite.prepare(`
-      SELECT COUNT(*) as count FROM (
-        SELECT customerName FROM deals GROUP BY UPPER(TRIM(customerName)) HAVING COUNT(*) > 1
-      )
-    `).get()
-
-    // Funded this month
-    const now = new Date()
-    const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10)
-    const fundedThisMonth = sqlite.prepare(`
-      SELECT COUNT(*) as count FROM deals
-      WHERE status = 'Funded' AND submittedDate >= ?
-    `).get(firstOfMonth)
-
-    // Average discount by portal
-    const avgDiscountByPortal = sqlite.prepare(`
-      SELECT portal, AVG(discount) as avgDiscount, COUNT(*) as count
-      FROM deals WHERE discount IS NOT NULL AND decision = 'Approved'
-      GROUP BY portal
-    `).all()
-
-    sqlite.close()
-
     res.json({
-      byPortal,
-      byStatus,
-      activeCount: activeCount.count,
-      awaitingDocs: {
-        count: awaitingDocs.count,
-        oldestAt: awaitingDocs.oldestAt,
-      },
-      staleDocsCount: staleDocs.count,
-      multiSubmitCount: multiSubmit.count,
-      fundedThisMonth: fundedThisMonth.count,
-      avgDiscountByPortal,
+      total: parseInt(totalRows[0].count),
+      byPortal: Object.fromEntries(portalRows.map(r => [r.portal, parseInt(r.count)])),
+      byStatus: statusRows.map(r => ({ status: r.status, count: parseInt(r.count) })),
+      active: parseInt(activeRows[0].count),
+      awaitingDocs: parseInt(awaitingRows[0].count),
+      oldestAwaitingHours,
+      staleDocs: parseInt(staleRows[0].count),
+      fundedThisMonth: parseInt(fundedRows[0].count),
+      multiSubmit: parseInt(multiRows[0].count),
+      avgDiscountByPortal: Object.fromEntries(avgDiscountRows.map(r => [r.portal, parseFloat(r.avg_discount)])),
     })
   } catch (err) {
-    console.error('[DealTracker] GET /stats error:', err)
+    console.error('[DealTracker] GET /stats error:', err.message)
     res.status(500).json({ error: err.message })
   }
 })
 
-// GET /api/deal-tracker/history/:dealId
+// ── GET /api/deal-tracker/history/:dealId ────────────────────────────────────
 router.get('/deal-tracker/history/:dealId', async (req, res) => {
   try {
+    const db = getDb()
     const { dealId } = req.params
-    const sqlite = getSqliteDb()
-    if (!sqlite) {
-      return res.status(503).json({ error: 'Finance monitor database unavailable' })
-    }
+    const portal = req.query.portal || 'ispc'
 
-    const history = sqlite.prepare(`
-      SELECT * FROM status_history WHERE dealId = ? ORDER BY changedAt ASC
-    `).all(dealId)
+    const [dealResult, historyResult] = await Promise.all([
+      db.query(
+        'SELECT * FROM finance_monitor_deals WHERE deal_id = $1 AND portal = $2',
+        [dealId, portal]
+      ),
+      db.query(
+        'SELECT * FROM finance_monitor_history WHERE deal_id = $1 AND portal = $2 ORDER BY changed_at DESC',
+        [dealId, portal]
+      ),
+    ])
 
-    const deal = sqlite.prepare(`SELECT * FROM deals WHERE dealId = ?`).get(dealId)
-    sqlite.close()
-
-    if (!deal) {
+    if (dealResult.rows.length === 0) {
       return res.status(404).json({ error: 'Deal not found' })
     }
 
-    res.json({ deal, history })
+    // Also get comparison deals for same customer
+    const deal = dealResult.rows[0]
+    const { rows: relatedDeals } = await db.query(
+      'SELECT * FROM finance_monitor_deals WHERE customer_name = $1 AND NOT (deal_id = $2 AND portal = $3)',
+      [deal.customer_name, dealId, portal]
+    )
+
+    res.json({
+      deal,
+      history: historyResult.rows,
+      relatedDeals,
+    })
   } catch (err) {
-    console.error('[DealTracker] GET /history error:', err)
+    console.error('[DealTracker] GET /history error:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ── POST /api/deal-tracker/sync ─────────────────────────────────────────────
+// Called by the finance monitor agent to push deal updates
+router.post('/deal-tracker/sync', async (req, res) => {
+  try {
+    const db = getDb()
+    const { deals, portal } = req.body
+
+    if (!deals || !Array.isArray(deals) || !portal) {
+      return res.status(400).json({ error: 'Required: { deals: [...], portal: "ispc" }' })
+    }
+
+    let newCount = 0
+    let changedCount = 0
+    const alerts = []
+
+    for (const deal of deals) {
+      // Check existing
+      const { rows: existing } = await db.query(
+        'SELECT status, docs_requested_at FROM finance_monitor_deals WHERE deal_id = $1 AND portal = $2',
+        [deal.dealId, portal]
+      )
+
+      const now = new Date()
+
+      if (existing.length === 0) {
+        // Insert new deal
+        const docsRequestedAt = deal.status === 'Awaiting Docs' ? now : null
+        await db.query(`
+          INSERT INTO finance_monitor_deals 
+            (deal_id, portal, customer_name, submitted_date, assigned_user, decision, discount,
+             funding_requirements, status, docs_requested_at, last_checked_at, created_at, updated_at)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+        `, [
+          deal.dealId, portal, deal.customerName, deal.submittedDate,
+          deal.assignedUser, deal.decision, deal.discount,
+          deal.fundingRequirements, deal.status, docsRequestedAt, now, now, now,
+        ])
+        newCount++
+      } else {
+        const old = existing[0]
+        if (old.status !== deal.status) {
+          // Status changed!
+          changedCount++
+
+          let docsRequestedAt = old.docs_requested_at
+          if (deal.status === 'Awaiting Docs' && !old.docs_requested_at) {
+            docsRequestedAt = now
+          }
+
+          await db.query(`
+            UPDATE finance_monitor_deals SET
+              customer_name = $1, submitted_date = $2, assigned_user = $3,
+              decision = $4, discount = $5, funding_requirements = $6,
+              status = $7, last_status = $8, status_changed_at = $9,
+              docs_requested_at = $10, last_checked_at = $11, updated_at = $12
+            WHERE deal_id = $13 AND portal = $14
+          `, [
+            deal.customerName, deal.submittedDate, deal.assignedUser,
+            deal.decision, deal.discount, deal.fundingRequirements,
+            deal.status, old.status, now, docsRequestedAt, now, now,
+            deal.dealId, portal,
+          ])
+
+          // Log to history
+          await db.query(`
+            INSERT INTO finance_monitor_history (deal_id, portal, old_status, new_status, changed_at)
+            VALUES ($1, $2, $3, $4, $5)
+          `, [deal.dealId, portal, old.status, deal.status, now])
+
+          alerts.push({
+            type: 'status_change',
+            dealId: deal.dealId,
+            customerName: deal.customerName,
+            oldStatus: old.status,
+            newStatus: deal.status,
+          })
+        } else {
+          // No status change, just update last_checked
+          await db.query(`
+            UPDATE finance_monitor_deals SET 
+              last_checked_at = $1, updated_at = $1,
+              customer_name = $2, assigned_user = $3, decision = $4, discount = $5
+            WHERE deal_id = $6 AND portal = $7
+          `, [now, deal.customerName, deal.assignedUser, deal.decision, deal.discount, deal.dealId, portal])
+        }
+      }
+    }
+
+    res.json({ ok: true, newCount, changedCount, alerts, totalProcessed: deals.length })
+  } catch (err) {
+    console.error('[DealTracker] POST /sync error:', err.message)
     res.status(500).json({ error: err.message })
   }
 })
