@@ -7,6 +7,46 @@ import { getDb } from './db/index.js'
 
 const router = express.Router()
 
+/** Convert snake_case PG row to camelCase for frontend */
+function toCamel(row) {
+  if (!row) return row
+  return {
+    dealId: row.deal_id,
+    portal: row.portal,
+    customerName: row.customer_name,
+    submittedDate: row.submitted_date,
+    assignedUser: row.assigned_user,
+    decision: row.decision,
+    discount: row.discount != null ? parseFloat(row.discount) : null,
+    fundingRequirements: row.funding_requirements,
+    status: row.status,
+    lastStatus: row.last_status,
+    statusChangedAt: row.status_changed_at,
+    docsRequestedAt: row.docs_requested_at,
+    lastCheckedAt: row.last_checked_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    saleAmount: row.sale_amount != null ? parseFloat(row.sale_amount) : null,
+    dealSource: row.deal_source,
+    salesRep: row.sales_rep,
+    financeAmount: row.finance_amount != null ? parseFloat(row.finance_amount) : null,
+    saleDate: row.sale_date,
+    dealNotes: row.deal_notes,
+    isMultiSubmit: row.isMultiSubmit || false,
+  }
+}
+
+function historyCamel(row) {
+  return {
+    id: row.id,
+    dealId: row.deal_id,
+    portal: row.portal,
+    oldStatus: row.old_status,
+    newStatus: row.new_status,
+    changedAt: row.changed_at,
+  }
+}
+
 // ── GET /api/deal-tracker/deals ─────────────────────────────────────────────
 router.get('/deal-tracker/deals', async (req, res) => {
   try {
@@ -65,16 +105,26 @@ router.get('/deal-tracker/deals', async (req, res) => {
     const { rows: multiRows } = await db.query(multiQuery)
     const multiCustomers = new Set(multiRows.map(r => r.customer_name))
 
-    const enriched = rows.map(row => ({
-      ...row,
-      isMultiSubmit: multiCustomers.has(row.customer_name),
-    }))
+    const enriched = rows.map(row => {
+      row.isMultiSubmit = multiCustomers.has(row.customer_name)
+      return toCamel(row)
+    })
+
+    const totalCount = parseInt(countRows[0].count)
+    const pageInt = parseInt(page)
+    const limitInt = parseInt(limit)
 
     res.json({
       deals: enriched,
-      total: parseInt(countRows[0].count),
-      page: parseInt(page),
-      limit: parseInt(limit),
+      total: totalCount,
+      page: pageInt,
+      limit: limitInt,
+      pagination: {
+        page: pageInt,
+        limit: limitInt,
+        total: totalCount,
+        pages: Math.ceil(totalCount / limitInt),
+      },
     })
   } catch (err) {
     console.error('[DealTracker] GET /deals error:', err.message)
@@ -111,19 +161,21 @@ router.get('/deal-tracker/comparison', async (req, res) => {
       const approved = deals.filter(d => d.decision === 'Approved' && d.discount != null)
       let bestDealId = null
       if (approved.length > 0) {
-        const best = approved.reduce((a, b) => (a.discount < b.discount ? a : b))
+        const best = approved.reduce((a, b) => (parseFloat(a.discount) < parseFloat(b.discount) ? a : b))
         bestDealId = best.deal_id
       }
       return {
         customerName: name,
-        deals: deals.map(d => ({
-          ...d,
-          isBestRate: d.deal_id === bestDealId,
-        })),
+        portalCount: new Set(deals.map(d => d.portal)).size,
+        deals: deals.map(d => {
+          const camel = toCamel(d)
+          camel.isBestRate = d.deal_id === bestDealId
+          return camel
+        }),
       }
     })
 
-    res.json(comparisons)
+    res.json({ comparisons })
   } catch (err) {
     console.error('[DealTracker] GET /comparison error:', err.message)
     res.status(500).json({ error: err.message })
@@ -234,9 +286,9 @@ router.get('/deal-tracker/history/:dealId', async (req, res) => {
     )
 
     res.json({
-      deal,
-      history: historyResult.rows,
-      relatedDeals,
+      deal: toCamel(deal),
+      history: historyResult.rows.map(historyCamel),
+      relatedDeals: relatedDeals.map(toCamel),
     })
   } catch (err) {
     console.error('[DealTracker] GET /history error:', err.message)
