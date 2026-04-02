@@ -37,15 +37,13 @@ router.get('/deal-tracker/deals', async (req, res) => {
     const query = `
       SELECT 
         fm.*,
-        d.sale_amount,
-        d.deal_source,
-        d.sales_rep,
-        d.finance_amount,
-        d.sale_date,
-        d.notes as deal_notes
+        NULL::numeric as sale_amount,
+        NULL::text as deal_source,
+        NULL::text as sales_rep,
+        NULL::numeric as finance_amount,
+        NULL::date as sale_date,
+        NULL::text as deal_notes
       FROM finance_monitor_deals fm
-      LEFT JOIN deals d ON UPPER(TRIM(d.customer_name)) = UPPER(TRIM(fm.customer_name))
-        AND LOWER(d.finance_company) = LOWER(fm.portal)
       ${whereClause}
       ORDER BY fm.updated_at DESC
       LIMIT $${paramIdx++} OFFSET $${paramIdx++}
