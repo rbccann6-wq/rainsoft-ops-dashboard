@@ -94,7 +94,7 @@ router.get('/deal-tracker/deals', async (req, res) => {
       ${whereClause}
       ORDER BY
         CASE WHEN fm.submitted_date IS NULL OR fm.submitted_date = '' THEN 0 ELSE 1 END DESC,
-        CASE WHEN fm.submitted_date ~ '^\d{1,2}/\d{1,2}/\d{4}$'
+        CASE WHEN fm.submitted_date ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$'
           THEN TO_DATE(fm.submitted_date, 'MM/DD/YYYY')
           ELSE '1970-01-01'::date END DESC,
         fm.customer_name ASC
