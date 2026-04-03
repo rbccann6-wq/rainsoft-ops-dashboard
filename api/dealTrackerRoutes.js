@@ -529,4 +529,33 @@ router.post('/deal-tracker/init-db', async (req, res) => {
   }
 })
 
+// ── POST /api/deal-tracker/cleanup-dupes ─────────────────────────────────────
+// Remove generated-ID duplicates where a real numeric portal ID exists
+router.post('/deal-tracker/cleanup-dupes', async (req, res) => {
+  try {
+    const db = getDb()
+    // Find non-numeric deal_ids that have a matching numeric duplicate (same customer+portal+submitted_date)
+    const { rows: dupes } = await db.query(`
+      DELETE FROM finance_monitor_deals
+      WHERE deal_id !~ '^[0-9]+$'
+        AND EXISTS (
+          SELECT 1 FROM finance_monitor_deals d2
+          WHERE d2.deal_id ~ '^[0-9]+$'
+            AND d2.portal = finance_monitor_deals.portal
+            AND d2.customer_name = finance_monitor_deals.customer_name
+            AND COALESCE(d2.submitted_date, '') = COALESCE(finance_monitor_deals.submitted_date, '')
+        )
+      RETURNING deal_id, portal, customer_name
+    `)
+    // Also clean up history for deleted IDs
+    for (const d of dupes) {
+      await db.query('DELETE FROM finance_monitor_history WHERE deal_id = $1 AND portal = $2', [d.deal_id, d.portal])
+    }
+    res.json({ ok: true, deleted: dupes.length, removed: dupes.map(d => ({ dealId: d.deal_id, name: d.customer_name })) })
+  } catch (err) {
+    console.error('[DealTracker] cleanup-dupes error:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
 export default router
