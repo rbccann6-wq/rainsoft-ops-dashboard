@@ -382,3 +382,9 @@ CREATE TABLE IF NOT EXISTS finance_email_log (
   processed_at    TIMESTAMPTZ DEFAULT NOW(),
   error           TEXT
 );
+
+-- Migration: Add phone/city/zip/email to finance_monitor_deals
+ALTER TABLE finance_monitor_deals ADD COLUMN IF NOT EXISTS phone TEXT;
+ALTER TABLE finance_monitor_deals ADD COLUMN IF NOT EXISTS city TEXT;
+ALTER TABLE finance_monitor_deals ADD COLUMN IF NOT EXISTS zip TEXT;
+ALTER TABLE finance_monitor_deals ADD COLUMN IF NOT EXISTS email TEXT;

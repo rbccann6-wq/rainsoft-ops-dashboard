@@ -92,7 +92,7 @@ router.get('/deal-tracker/deals', async (req, res) => {
       SELECT fm.*
       FROM finance_monitor_deals fm
       ${whereClause}
-      ORDER BY fm.customer_name ASC, fm.updated_at DESC
+      ORDER BY fm.submitted_date DESC, fm.customer_name ASC
       LIMIT $${paramIdx++} OFFSET $${paramIdx++}
     `
     params.push(parseInt(limit), offset)
