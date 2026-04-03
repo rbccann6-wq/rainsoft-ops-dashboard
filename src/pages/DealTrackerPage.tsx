@@ -200,6 +200,16 @@ function effectiveRate(deal: Deal): number | null {
   return deal.buyRate ?? deal.discount ?? null
 }
 
+/** ISPC risk holdback calculations */
+function ispcRiskInfo(deal: Deal): { fundedPct: number; riskAmt: number; fundAmt: number } | null {
+  if (deal.portal?.toLowerCase() !== 'ispc' || deal.discount == null || deal.financeAmount == null) return null
+  const riskPct = deal.discount / 100
+  const riskAmt = Math.round(deal.financeAmount * riskPct)
+  const fundAmt = Math.round(deal.financeAmount * (1 - riskPct))
+  const fundedPct = Math.round((1 - riskPct) * 100)
+  return { fundedPct, riskAmt, fundAmt }
+}
+
 /** Parse customer name into { last, first, firstInitial } regardless of format.
  *  "HAWK, C"           → { last: "HAWK", first: "C",           firstInitial: "C" }
  *  "HAWK, CHRISTOPHER"  → { last: "HAWK", first: "CHRISTOPHER", firstInitial: "C" }
@@ -582,9 +592,10 @@ function CustomerGroupCard({ group, comparisons }: { group: CustomerGroup; compa
               <tr className="border-b border-slate-800/50">
                 <th className="text-left px-4 py-2 text-xs font-medium text-slate-500">Portal</th>
                 <th className="text-left px-3 py-2 text-xs font-medium text-slate-500">Decision</th>
-                <th className="text-left px-3 py-2 text-xs font-medium text-slate-500">Rate</th>
-                <th className="text-left px-3 py-2 text-xs font-medium text-slate-500">Tier</th>
-                <th className="text-left px-3 py-2 text-xs font-medium text-slate-500">Amount</th>
+                <th className="text-left px-3 py-2 text-xs font-medium text-slate-500">Buy Rate</th>
+                <th className="text-left px-3 py-2 text-xs font-medium text-slate-500">Risk Amt</th>
+                <th className="text-left px-3 py-2 text-xs font-medium text-slate-500">Fund Amt</th>
+                <th className="text-left px-3 py-2 text-xs font-medium text-slate-500">Requested</th>
                 <th className="text-left px-3 py-2 text-xs font-medium text-slate-500">Status</th>
                 <th className="text-left px-3 py-2 text-xs font-medium text-slate-500">Submitted</th>
                 <th className="text-left px-3 py-2 text-xs font-medium text-slate-500">Funded</th>
@@ -596,6 +607,7 @@ function CustomerGroupCard({ group, comparisons }: { group: CustomerGroup; compa
                 const rate = effectiveRate(deal)
                 const isBest = deal.dealId === group.bestRateDealId
                 const isExp = expandedDealId === deal.dealId
+                const risk = ispcRiskInfo(deal)
 
                 return (
                   <>
@@ -618,19 +630,32 @@ function CustomerGroupCard({ group, comparisons }: { group: CustomerGroup; compa
                         <div className="flex items-center gap-1">
                           <span className={cn(
                             'font-mono font-semibold text-sm',
-                            rate != null ? 'text-emerald-300' : 'text-slate-500'
+                            risk ? 'text-blue-300' : rate != null ? 'text-emerald-300' : 'text-slate-500'
                           )}>
-                            {rate != null ? `${rate}%` : '—'}
+                            {risk ? `${risk.fundedPct}%` : rate != null ? `${rate}%` : '—'}
                           </span>
-                          {isBest && (
+                          {isBest && !risk && (
                             <span className="px-1 py-0.5 rounded text-[9px] font-bold bg-emerald-800/60 text-emerald-300 border border-emerald-700 leading-none">
                               BEST
                             </span>
                           )}
                         </div>
                       </td>
-                      <td className="px-3 py-2 text-xs text-slate-400">
-                        {deal.tier ?? '—'}
+                      <td className="px-3 py-2 text-xs font-mono">
+                        {risk ? (
+                          <span className="text-red-400">{fmtCurrency(risk.riskAmt)}</span>
+                        ) : (
+                          <span className="text-slate-500">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-xs font-mono">
+                        {risk ? (
+                          <span className="text-emerald-300">{fmtCurrency(risk.fundAmt)}</span>
+                        ) : deal.portal?.toLowerCase() === 'foundation' ? (
+                          <span className="text-emerald-300">{fmtCurrency(deal.financeAmount)}</span>
+                        ) : (
+                          <span className="text-slate-500">—</span>
+                        )}
                       </td>
                       <td className="px-3 py-2 text-xs text-slate-300 font-mono">
                         {fmtCurrency(deal.financeAmount)}
@@ -655,7 +680,7 @@ function CustomerGroupCard({ group, comparisons }: { group: CustomerGroup; compa
                     </tr>
                     {isExp && (
                       <tr key={`${deal.dealId}-detail`}>
-                        <td colSpan={9} className="p-0">
+                        <td colSpan={10} className="p-0">
                           <ExpandedRow deal={deal} comparisons={comparisons} />
                         </td>
                       </tr>
@@ -1103,8 +1128,10 @@ export function DealTrackerPage() {
                   <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Submitted</th>
                   <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Portal</th>
                   <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Decision</th>
-                  <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Rate</th>
-                  <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Amount</th>
+                  <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Buy Rate</th>
+                  <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Risk Amt</th>
+                  <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Fund Amt</th>
+                  <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Requested</th>
                   <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">Status</th>
                   <th className="text-left px-3 py-3 text-xs font-medium text-slate-400 whitespace-nowrap">In Status</th>
                   <th className="px-3 py-3 w-8"></th>
@@ -1114,6 +1141,7 @@ export function DealTrackerPage() {
                 {deals.map(deal => {
                   const isExpanded = expandedDeal === deal.dealId
                   const rate = effectiveRate(deal)
+                  const risk = ispcRiskInfo(deal)
                   const isMulti = comparisons.some(c => c.deals.some(d => d.dealId === deal.dealId) && c.portalCount > 1)
 
                   return (
@@ -1150,10 +1178,26 @@ export function DealTrackerPage() {
                         <td className="px-3 py-3">
                           <span className={cn(
                             'font-mono font-semibold text-sm',
-                            rate != null ? 'text-emerald-300' : 'text-slate-500'
+                            risk ? 'text-blue-300' : rate != null ? 'text-emerald-300' : 'text-slate-500'
                           )}>
-                            {rate != null ? `${rate}%` : '—'}
+                            {risk ? `${risk.fundedPct}%` : rate != null ? `${rate}%` : '—'}
                           </span>
+                        </td>
+                        <td className="px-3 py-3 text-xs font-mono">
+                          {risk ? (
+                            <span className="text-red-400">{fmtCurrency(risk.riskAmt)}</span>
+                          ) : (
+                            <span className="text-slate-500">—</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-3 text-xs font-mono">
+                          {risk ? (
+                            <span className="text-emerald-300">{fmtCurrency(risk.fundAmt)}</span>
+                          ) : deal.portal?.toLowerCase() === 'foundation' ? (
+                            <span className="text-emerald-300">{fmtCurrency(deal.financeAmount)}</span>
+                          ) : (
+                            <span className="text-slate-500">—</span>
+                          )}
                         </td>
                         <td className="px-3 py-3 text-xs text-slate-300 font-mono">
                           {fmtCurrency(deal.financeAmount)}
@@ -1175,7 +1219,7 @@ export function DealTrackerPage() {
                       </tr>
                       {isExpanded && (
                         <tr key={`${deal.dealId}-expanded`}>
-                          <td colSpan={9} className="p-0">
+                          <td colSpan={11} className="p-0">
                             <ExpandedRow deal={deal} comparisons={comparisons} />
                           </td>
                         </tr>
