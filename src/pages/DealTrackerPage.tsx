@@ -193,11 +193,6 @@ function fmtDate(dateStr: string | null | undefined): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-function fmtRate(discount: number | null): string {
-  if (discount == null) return '—'
-  return `${discount.toFixed(1)}%`
-}
-
 function fmtCurrency(n: number | null): string {
   if (n == null) return '—'
   return `$${Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
