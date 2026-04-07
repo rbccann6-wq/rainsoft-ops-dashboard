@@ -47,6 +47,17 @@ function toCamel(row) {
     zip: row.zip,
     email: row.email,
     isMultiSubmit: row.isMultiSubmit || false,
+    // Document tracking
+    docs: {
+      ispcContract: row.doc_ispc_contract || false,
+      merchantPurchase: row.doc_merchant_purchase || false,
+      chargeSlip: row.doc_charge_slip || false,
+      crystalReport: row.doc_crystal_report || false,
+      fundingReport: row.doc_funding_report || false,
+    },
+    docsCheckedAt: row.docs_checked_at,
+    pgNotes: row.pg_notes,
+    pgId: row.pg_id,
   }
 }
 
@@ -610,6 +621,18 @@ router.post('/deal-tracker/init-db', async (req, res) => {
       ['city', 'TEXT'],
       ['zip', 'TEXT'],
       ['email', 'TEXT'],
+      // Document tracking columns
+      ['doc_ispc_contract', 'BOOLEAN DEFAULT FALSE'],
+      ['doc_merchant_purchase', 'BOOLEAN DEFAULT FALSE'],
+      ['doc_charge_slip', 'BOOLEAN DEFAULT FALSE'],
+      ['doc_crystal_report', 'BOOLEAN DEFAULT FALSE'],
+      ['doc_funding_report', 'BOOLEAN DEFAULT FALSE'],
+      ['docs_checked_at', 'TIMESTAMPTZ'],
+      ['sale_amount', 'NUMERIC(10,2)'],
+      ['deal_source', 'TEXT'],
+      ['sales_rep', 'TEXT'],
+      ['pg_notes', 'TEXT'],
+      ['pg_id', 'INTEGER'],
     ]
     for (const [col, type] of newCols) {
       await db.query(`
@@ -710,6 +733,95 @@ router.post('/deal-tracker/cleanup-dupes', async (req, res) => {
     })
   } catch (err) {
     console.error('[DealTracker] cleanup-dupes error:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ── POST /api/deal-tracker/update-docs — update document status for a deal ───
+router.post('/deal-tracker/update-docs', async (req, res) => {
+  try {
+    const db = getDb()
+    const { dealId, portal, docs } = req.body
+    if (!dealId || !portal || !docs) {
+      return res.status(400).json({ error: 'Required: { dealId, portal, docs: { ispc_contract, merchant_purchase, ... } }' })
+    }
+
+    const sets = []
+    const params = []
+    let idx = 1
+
+    const docFields = {
+      ispc_contract: 'doc_ispc_contract',
+      merchant_purchase: 'doc_merchant_purchase',
+      charge_slip: 'doc_charge_slip',
+      crystal_report: 'doc_crystal_report',
+      funding_report: 'doc_funding_report',
+    }
+
+    for (const [key, col] of Object.entries(docFields)) {
+      if (docs[key] !== undefined) {
+        sets.push(`${col} = $${idx++}`)
+        params.push(docs[key])
+      }
+    }
+
+    sets.push(`docs_checked_at = $${idx++}`)
+    params.push(new Date())
+
+    params.push(dealId, portal)
+
+    await db.query(
+      `UPDATE finance_monitor_deals SET ${sets.join(', ')} WHERE deal_id = $${idx++} AND portal = $${idx++}`,
+      params
+    )
+
+    res.json({ ok: true, dealId, portal })
+  } catch (err) {
+    console.error('[DealTracker] POST /update-docs error:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ── GET /api/deal-tracker/doc-status — get document status for all active deals ──
+router.get('/deal-tracker/doc-status', async (req, res) => {
+  try {
+    const db = getDb()
+    const { rows } = await db.query(`
+      SELECT deal_id, portal, customer_name, status, decision,
+             doc_ispc_contract, doc_merchant_purchase, doc_charge_slip,
+             doc_crystal_report, doc_funding_report, docs_checked_at
+      FROM finance_monitor_deals
+      WHERE portal = 'ispc'
+        AND status NOT IN ('Declined', 'Cancelled', 'No Available Offer Found')
+      ORDER BY
+        CASE
+          WHEN status = 'Funded' THEN 1
+          WHEN status = 'Funding Pending' THEN 2
+          WHEN status LIKE '%Doc%' THEN 3
+          ELSE 4
+        END,
+        updated_at DESC
+    `)
+
+    res.json({
+      deals: rows.map(r => ({
+        dealId: r.deal_id,
+        portal: r.portal,
+        customerName: r.customer_name,
+        status: r.status,
+        decision: r.decision,
+        docs: {
+          ispc_contract: r.doc_ispc_contract || false,
+          merchant_purchase: r.doc_merchant_purchase || false,
+          charge_slip: r.doc_charge_slip || false,
+          crystal_report: r.doc_crystal_report || false,
+          funding_report: r.doc_funding_report || false,
+        },
+        docsCheckedAt: r.docs_checked_at,
+      })),
+    })
+  } catch (err) {
+    console.error('[DealTracker] GET /doc-status error:', err.message)
     res.status(500).json({ error: err.message })
   }
 })

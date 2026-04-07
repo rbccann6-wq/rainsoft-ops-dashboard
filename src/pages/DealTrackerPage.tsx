@@ -46,6 +46,14 @@ interface Deal {
   saleDate: string | null
   pgNotes: string | null
   pgId: number | null
+  docs?: {
+    ispcContract: boolean
+    merchantPurchase: boolean
+    chargeSlip: boolean
+    crystalReport: boolean
+    fundingReport: boolean
+  }
+  docsCheckedAt?: string | null
 }
 
 interface CustomerGroup {
@@ -813,6 +821,46 @@ function ExpandedRow({ deal, comparisons }: { deal: Deal; comparisons: Compariso
               </div>
             )}
           </div>
+
+          {/* Document Status */}
+          {deal.portal?.toLowerCase() === 'ispc' && deal.docs && (
+            <div className="mt-3">
+              <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+                <FileText className="w-3.5 h-3.5" /> Documents
+              </h4>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                {[
+                  { key: 'ispcContract', label: 'ISPC Contract' },
+                  { key: 'merchantPurchase', label: 'Merchant Purchase Agreement' },
+                  { key: 'chargeSlip', label: 'Charge Slip' },
+                  { key: 'crystalReport', label: 'Crystal Report' },
+                  { key: 'fundingReport', label: 'Funding Report' },
+                ].map(doc => {
+                  const has = deal.docs?.[doc.key as keyof typeof deal.docs] || false
+                  return (
+                    <div
+                      key={doc.key}
+                      className={cn(
+                        'flex items-center gap-1.5 px-2 py-1.5 rounded-md border text-xs',
+                        has
+                          ? 'bg-emerald-950/30 border-emerald-800/50 text-emerald-300'
+                          : 'bg-slate-800/40 border-slate-700/50 text-slate-500'
+                      )}
+                    >
+                      {has
+                        ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+                        : <Clock className="w-3.5 h-3.5 text-slate-600 flex-shrink-0" />
+                      }
+                      <span className="truncate">{doc.label}</span>
+                    </div>
+                  )
+                })}
+              </div>
+              {deal.docsCheckedAt && (
+                <p className="text-[10px] text-slate-600 mt-1">Last checked: {new Date(deal.docsCheckedAt).toLocaleString()}</p>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Right: comparison card if multi-submitted */}
