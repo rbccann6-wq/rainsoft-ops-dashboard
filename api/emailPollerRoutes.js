@@ -152,6 +152,23 @@ async function pollOnce() {
     }
   }
 
+  // Also run finance email → CRM linker on each poll cycle
+  try {
+    const port2 = process.env.PORT || 3000
+    const linkR = await fetch(`http://localhost:${port2}/api/finance-emails/link-to-crm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    if (linkR.ok) {
+      const linkResult = await linkR.json()
+      if (linkResult.linked > 0) {
+        console.log(`[poller] CRM linker: ${linkResult.linked} emails linked, ${linkResult.filesUploaded} files uploaded`)
+      }
+    }
+  } catch (err) {
+    console.error('[poller] CRM linker failed:', err.message)
+  }
+
   pollerState.lastPoll = new Date().toISOString()
   pollerState.lastError = null
 }
