@@ -195,10 +195,15 @@ function fmtCurrency(n: number | null): string {
   return `$${Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
 }
 
-/** Get effective dealer rate (what you keep): 100% minus the lender discount */
+/** Get effective dealer rate (what you keep): 100% minus the lender discount.
+ *  For ISPC: no discount listed = 100% approval (no dealer fee). */
 function effectiveRate(deal: Deal): number | null {
   const raw = deal.buyRate ?? deal.discount ?? null
-  if (raw == null) return null
+  if (raw == null) {
+    // ISPC with approved decision but no discount = 100% buy rate
+    if (deal.portal?.toLowerCase() === 'ispc' && deal.decision === 'Approved') return 100
+    return null
+  }
   return Math.round((100 - raw) * 100) / 100
 }
 
