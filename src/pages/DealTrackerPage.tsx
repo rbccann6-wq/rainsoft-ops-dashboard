@@ -195,9 +195,11 @@ function fmtCurrency(n: number | null): string {
   return `$${Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
 }
 
-/** Get effective rate: buyRate (Foundation) or discount (ISPC) — whichever is populated */
+/** Get effective dealer rate (what you keep): 100% minus the lender discount */
 function effectiveRate(deal: Deal): number | null {
-  return deal.buyRate ?? deal.discount ?? null
+  const raw = deal.buyRate ?? deal.discount ?? null
+  if (raw == null) return null
+  return Math.round((100 - raw) * 100) / 100
 }
 
 /** ISPC risk holdback calculations */
@@ -315,7 +317,7 @@ function groupByCustomer(deals: Deal[]): CustomerGroup[] {
 
     const portals = [...new Set(groupDeals.map(d => d.portal))]
 
-    // Best rate = lowest rate among approved deals
+    // Best rate = highest effective rate (most you keep) among approved deals
     const approved = groupDeals.filter(d =>
       d.decision === 'Approved' && effectiveRate(d) != null
     )
@@ -323,7 +325,7 @@ function groupByCustomer(deals: Deal[]): CustomerGroup[] {
     let bestRate: number | null = null
     if (approved.length > 0) {
       const best = approved.reduce((a, b) =>
-        (effectiveRate(a)! < effectiveRate(b)!) ? a : b
+        (effectiveRate(a)! > effectiveRate(b)!) ? a : b
       )
       bestRateDealId = best.dealId
       bestRate = effectiveRate(best)
@@ -464,7 +466,7 @@ function ComparisonCard({ comparisons, dealId }: { comparisons: Comparison[]; de
                     'font-mono font-semibold',
                     d.isBestRate ? 'text-emerald-300' : 'text-slate-300'
                   )}>
-                    {fmtRate(d.discount)}
+                    {d.discount != null ? `${Math.round((100 - d.discount) * 100) / 100}%` : '—'}
                   </span>
                   {d.isBestRate && (
                     <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-900/60 text-emerald-300 border border-emerald-700">
@@ -748,7 +750,7 @@ function ExpandedRow({ deal, comparisons }: { deal: Deal; comparisons: Compariso
             {deal.buyRate != null && (
               <div>
                 <span className="text-slate-500">Buy Rate: </span>
-                <span className="text-slate-300">{deal.buyRate}%</span>
+                <span className="text-slate-300">{Math.round((100 - deal.buyRate) * 100) / 100}%</span>
               </div>
             )}
             {deal.tier != null && (

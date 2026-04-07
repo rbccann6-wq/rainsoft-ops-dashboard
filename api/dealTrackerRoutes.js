@@ -200,7 +200,7 @@ router.get('/deal-tracker/comparison', async (req, res) => {
       grouped[row.customer_name].push(row)
     }
 
-    // Find best rate per customer (lowest discount among approved)
+    // Find best rate per customer (lowest lender discount = highest dealer keep)
     const comparisons = Object.entries(grouped).map(([name, deals]) => {
       const approved = deals.filter(d => d.decision === 'Approved' && d.discount != null)
       let bestDealId = null
@@ -356,11 +356,109 @@ router.post('/deal-tracker/sync', async (req, res) => {
     const alerts = []
 
     for (const deal of deals) {
-      // Check existing
+      // Check existing by deal_id + portal (primary key)
       const { rows: existing } = await db.query(
-        'SELECT status, docs_requested_at FROM finance_monitor_deals WHERE deal_id = $1 AND portal = $2',
+        'SELECT deal_id, status, docs_requested_at FROM finance_monitor_deals WHERE deal_id = $1 AND portal = $2',
         [deal.dealId, portal]
       )
+
+      // Also check for same customer + portal with a different deal_id (ISPC reassigns IDs)
+      // Use fuzzy name matching: last name + first initial, to handle abbreviated vs full names
+      // e.g., "HAWK, C" should match "HAWK, CHRISTOPHER"
+      if (existing.length === 0 && deal.customerName) {
+        // Parse last name and first initial from the incoming deal name
+        const nameParts = deal.customerName.trim().toUpperCase().match(/^([A-Z'-]+)\s*,\s*(.+)$/)
+        const lastName = nameParts ? nameParts[1] : deal.customerName.trim().toUpperCase().split(/\s+/).pop()
+        const firstInitial = nameParts ? nameParts[2].trim()[0] : deal.customerName.trim().toUpperCase()[0]
+
+        // Match: same portal, same last name + first initial, different deal_id
+        const { rows: nameMatch } = await db.query(
+          `SELECT deal_id, status, docs_requested_at, customer_name FROM finance_monitor_deals
+           WHERE portal = $1 AND deal_id != $2
+             AND (
+               -- "LAST, FIRST..." format: match last name before comma + first char after comma
+               (customer_name LIKE '%,%' AND UPPER(SPLIT_PART(customer_name, ',', 1)) = $3
+                AND UPPER(TRIM(LEADING ' ' FROM SPLIT_PART(customer_name, ',', 2))) LIKE $4)
+               OR
+               -- Exact match fallback
+               LOWER(customer_name) = LOWER($5)
+             )`,
+          [portal, deal.dealId, lastName, firstInitial + '%', deal.customerName]
+        )
+        if (nameMatch.length > 0) {
+          // Same customer already exists under a different deal_id — update that row instead
+          const old = nameMatch[0]
+          const oldDealId = old.deal_id
+
+          // Prefer the numeric / newer deal_id
+          const useNewId = /^\d+$/.test(deal.dealId) && !/^\d+$/.test(oldDealId)
+
+          // Use the longer (more complete) customer name
+          const bestName = (deal.customerName || '').length >= (old.customer_name || '').length
+            ? deal.customerName : old.customer_name
+
+          if (old.status !== deal.status) {
+            changedCount++
+            let docsRequestedAt = old.docs_requested_at
+            if ((deal.status === 'Awaiting Docs' || deal.status === 'Approved - Need Docs') && !old.docs_requested_at) {
+              docsRequestedAt = new Date()
+            }
+
+            await db.query(`
+              UPDATE finance_monitor_deals SET
+                deal_id = $1, customer_name = $2, coapplicant = $3, submitted_date = $4, assigned_user = $5,
+                decision = $6, discount = $7, funding_requirements = $8,
+                status = $9, last_status = $10, status_changed_at = $11,
+                docs_requested_at = $12, last_checked_at = $13, updated_at = $13,
+                finance_amount = $14, buy_rate = $15, tier = $16, reference_number = $17, option_code = $18,
+                exp_date = $19, funding_date = $20, rescind_date = $21, state = $22, address = $23,
+                phone = COALESCE($24, phone), city = COALESCE($25, city), zip = COALESCE($26, zip), email = COALESCE($27, email)
+              WHERE deal_id = $28 AND portal = $29
+            `, [
+              useNewId ? deal.dealId : oldDealId,
+              bestName, deal.coapplicant, deal.submittedDate, deal.assignedUser,
+              deal.decision, deal.discount, deal.fundingRequirements,
+              deal.status, old.status, new Date(), docsRequestedAt, new Date(),
+              deal.financeAmount, deal.buyRate, deal.tier, deal.referenceNumber, deal.optionCode,
+              deal.expDate, deal.fundingDate, deal.rescindDate, deal.state, deal.address,
+              deal.phone, deal.city, deal.zip, deal.email,
+              oldDealId, portal,
+            ])
+
+            await db.query(`
+              INSERT INTO finance_monitor_history (deal_id, portal, old_status, new_status, changed_at)
+              VALUES ($1, $2, $3, $4, $5)
+            `, [useNewId ? deal.dealId : oldDealId, portal, old.status, deal.status, new Date()])
+
+            alerts.push({
+              type: 'status_change',
+              dealId: useNewId ? deal.dealId : oldDealId,
+              customerName: bestName,
+              oldStatus: old.status,
+              newStatus: deal.status,
+            })
+          } else {
+            // Same status — just update fields + deal_id if needed
+            await db.query(`
+              UPDATE finance_monitor_deals SET
+                deal_id = $1, last_checked_at = $2, updated_at = $2,
+                customer_name = $3, coapplicant = $4, assigned_user = $5, decision = $6, discount = COALESCE($7, discount),
+                finance_amount = COALESCE($8, finance_amount), buy_rate = COALESCE($9, buy_rate), tier = COALESCE($10, tier), reference_number = COALESCE($11, reference_number), option_code = COALESCE($12, option_code),
+                exp_date = COALESCE($13, exp_date), funding_date = COALESCE($14, funding_date), rescind_date = COALESCE($15, rescind_date), state = COALESCE($16, state), address = COALESCE($17, address),
+                phone = COALESCE($18, phone), city = COALESCE($19, city), zip = COALESCE($20, zip), email = COALESCE($21, email)
+              WHERE deal_id = $22 AND portal = $23
+            `, [
+              useNewId ? deal.dealId : oldDealId, new Date(),
+              bestName, deal.coapplicant, deal.assignedUser, deal.decision, deal.discount,
+              deal.financeAmount, deal.buyRate, deal.tier, deal.referenceNumber, deal.optionCode,
+              deal.expDate, deal.fundingDate, deal.rescindDate, deal.state, deal.address,
+              deal.phone, deal.city, deal.zip, deal.email,
+              oldDealId, portal
+            ])
+          }
+          continue // Skip the normal insert/update flow
+        }
+      }
 
       const now = new Date()
 
@@ -530,12 +628,13 @@ router.post('/deal-tracker/init-db', async (req, res) => {
 })
 
 // ── POST /api/deal-tracker/cleanup-dupes ─────────────────────────────────────
-// Remove generated-ID duplicates where a real numeric portal ID exists
+// Remove duplicate deals: generated-ID dupes + same customer/portal dupes (keep newest)
 router.post('/deal-tracker/cleanup-dupes', async (req, res) => {
   try {
     const db = getDb()
-    // Find non-numeric deal_ids that have a matching numeric duplicate (same customer+portal+submitted_date)
-    const { rows: dupes } = await db.query(`
+
+    // Pass 1: Remove non-numeric IDs where a numeric duplicate exists
+    const { rows: dupes1 } = await db.query(`
       DELETE FROM finance_monitor_deals
       WHERE deal_id !~ '^[0-9]+$'
         AND EXISTS (
@@ -547,11 +646,68 @@ router.post('/deal-tracker/cleanup-dupes', async (req, res) => {
         )
       RETURNING deal_id, portal, customer_name
     `)
-    // Also clean up history for deleted IDs
-    for (const d of dupes) {
+
+    // Pass 2: Same customer + same portal but different deal_ids — keep the one with the latest updated_at
+    // Use last name + first initial for matching to catch abbreviated vs full names (e.g., "HAWK, C" vs "HAWK, CHRISTOPHER")
+    const { rows: dupes2 } = await db.query(`
+      DELETE FROM finance_monitor_deals
+      WHERE ctid NOT IN (
+        SELECT DISTINCT ON (
+          portal,
+          UPPER(SPLIT_PART(customer_name, ',', 1)),
+          UPPER(LEFT(TRIM(LEADING ' ' FROM SPLIT_PART(customer_name, ',', 2)), 1))
+        ) ctid
+        FROM finance_monitor_deals
+        WHERE customer_name LIKE '%,%'
+        ORDER BY
+          portal,
+          UPPER(SPLIT_PART(customer_name, ',', 1)),
+          UPPER(LEFT(TRIM(LEADING ' ' FROM SPLIT_PART(customer_name, ',', 2)), 1)),
+          CASE WHEN deal_id ~ '^[0-9]+$' THEN 0 ELSE 1 END,
+          updated_at DESC NULLS LAST
+      )
+      AND customer_name LIKE '%,%'
+      AND EXISTS (
+        SELECT 1 FROM finance_monitor_deals d2
+        WHERE d2.portal = finance_monitor_deals.portal
+          AND d2.ctid != finance_monitor_deals.ctid
+          AND UPPER(SPLIT_PART(d2.customer_name, ',', 1)) = UPPER(SPLIT_PART(finance_monitor_deals.customer_name, ',', 1))
+          AND UPPER(LEFT(TRIM(LEADING ' ' FROM SPLIT_PART(d2.customer_name, ',', 2)), 1))
+            = UPPER(LEFT(TRIM(LEADING ' ' FROM SPLIT_PART(finance_monitor_deals.customer_name, ',', 2)), 1))
+      )
+      RETURNING deal_id, portal, customer_name
+    `)
+
+    // Pass 3: Exact name dupes (non-comma format or same exact name)
+    const { rows: dupes3 } = await db.query(`
+      DELETE FROM finance_monitor_deals
+      WHERE ctid NOT IN (
+        SELECT DISTINCT ON (portal, LOWER(customer_name)) ctid
+        FROM finance_monitor_deals
+        ORDER BY portal, LOWER(customer_name), updated_at DESC NULLS LAST
+      )
+      AND LOWER(customer_name) IN (
+        SELECT LOWER(customer_name) FROM finance_monitor_deals
+        GROUP BY portal, LOWER(customer_name) HAVING COUNT(*) > 1
+      )
+      RETURNING deal_id, portal, customer_name
+    `)
+
+    const allDupes = [...dupes1, ...dupes2, ...dupes3]
+
+    // Clean up history for deleted IDs
+    for (const d of allDupes) {
       await db.query('DELETE FROM finance_monitor_history WHERE deal_id = $1 AND portal = $2', [d.deal_id, d.portal])
     }
-    res.json({ ok: true, deleted: dupes.length, removed: dupes.map(d => ({ dealId: d.deal_id, name: d.customer_name })) })
+
+    res.json({
+      ok: true,
+      deleted: allDupes.length,
+      pass1_generated_ids: dupes1.length,
+      pass2_fuzzy_name: dupes2.length,
+      pass3_exact_name: dupes3.length,
+      removed: allDupes.map(d => ({ dealId: d.deal_id, name: d.customer_name })),
+    })
   } catch (err) {
     console.error('[DealTracker] cleanup-dupes error:', err.message)
     res.status(500).json({ error: err.message })
