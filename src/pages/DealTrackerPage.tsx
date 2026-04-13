@@ -937,6 +937,18 @@ export function DealTrackerPage() {
     return () => { if (autoRefreshRef.current) clearInterval(autoRefreshRef.current) }
   }, [autoRefresh, fetchDeals])
 
+  // Refetch when the tab regains focus or visibility — fixes "stale data after I came back to the tab"
+  useEffect(() => {
+    const onFocus = () => fetchDeals()
+    const onVisibility = () => { if (document.visibilityState === 'visible') fetchDeals() }
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [fetchDeals])
+
   // Debounce search input
   useEffect(() => {
     const t = setTimeout(() => setSearch(searchInput), 400)

@@ -1,60 +1,99 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { Mail, Bot, Megaphone, FlaskConical, AlertTriangle, ArrowRight } from 'lucide-react'
-import { mockEmails, mockAgents, mockSocialPosts, mockGoogleAdsSpend, mockResearchTasks } from '@/data/mock'
+import { Mail, Target, TrendingUp, ArrowRight, Loader2, Package, RefreshCw } from 'lucide-react'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
-import { ProgressBar } from '@/components/ui/ProgressBar'
-import { cn } from '@/lib/utils'
 import type { Email } from '@/types'
 import { fetchEmails } from '@/lib/emailApi'
 
 export function OverviewPage() {
-  const [emails, setEmails] = useState<Email[]>(mockEmails)
+  const [emails, setEmails] = useState<Email[]>([])
+  const [loadingEmails, setLoadingEmails] = useState(true)
+  const [leadStats, setLeadStats] = useState<{ lowes: number; smartmail: number; sfSynced: number } | null>(null)
+  const [dealStats, setDealStats] = useState<any>(null)
+  const [orderStats, setOrderStats] = useState<any>(null)
+  const [refreshing, setRefreshing] = useState(false)
+  const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date())
 
-  useEffect(() => {
-    fetchEmails({ top: 50 })
-      .then(data => setEmails(data.emails))
-      .catch(() => setEmails(mockEmails))
+  const refreshAll = useCallback(async () => {
+    setRefreshing(true)
+    setLoadingEmails(true)
+    try {
+      // Bypass HTTP cache so the user actually gets fresh server data on click.
+      const noCache: RequestInit = { cache: 'no-store' }
+
+      const tasks: Promise<unknown>[] = [
+        fetchEmails({ top: 50 })
+          .then(data => setEmails(data.emails))
+          .catch(() => {})
+          .finally(() => setLoadingEmails(false)),
+
+        fetch('/api/all-leads', noCache)
+          .then(r => r.ok ? r.json() : null)
+          .then(d => {
+            if (d) {
+              const lowes = d.lowes || []
+              const smart = d.smartmail || []
+              const sfSynced = [...lowes, ...smart].filter((l: any) => l.sf_lead_id).length
+              setLeadStats({ lowes: lowes.length, smartmail: smart.length, sfSynced })
+            }
+          })
+          .catch(() => {}),
+
+        fetch('/api/deal-tracker/stats', noCache)
+          .then(r => r.ok ? r.json() : null)
+          .then(d => { if (d) setDealStats(d) })
+          .catch(() => {}),
+
+        fetch('/api/pentair/stats', noCache)
+          .then(r => r.ok ? r.json() : null)
+          .then(d => { if (d?.recentActivity) setOrderStats(d.recentActivity) })
+          .catch(() => {}),
+      ]
+
+      await Promise.allSettled(tasks)
+      setLastRefreshed(new Date())
+    } finally {
+      setRefreshing(false)
+    }
   }, [])
 
+  // Initial load
+  useEffect(() => { refreshAll() }, [refreshAll])
+
+  // Refetch when the tab regains focus or the document becomes visible
+  useEffect(() => {
+    const onFocus = () => refreshAll()
+    const onVisibility = () => { if (document.visibilityState === 'visible') refreshAll() }
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [refreshAll])
+
   const unread = emails.filter((e) => !e.isRead)
-  const pendingPosts = mockSocialPosts.filter((p) => p.status === 'draft' || p.status === 'scheduled')
-  const ads = mockGoogleAdsSpend
-  const adsPercent = (ads.monthlySpend / ads.monthlyBudget) * 100
-  const recentResearch = mockResearchTasks.slice(0, 3)
 
   return (
     <div className="space-y-5">
-      <div>
-        <h2 className="text-xl font-semibold text-white">Good morning</h2>
-        <p className="text-sm text-slate-400 mt-1">
-          Here's your operational snapshot for RainSoft of the Wiregrass.
-        </p>
-      </div>
-
-      {/* Ads Cap Banner */}
-      {adsPercent >= 80 && (
-        <div className={cn(
-          'flex items-start gap-3 rounded-xl p-4 border',
-          adsPercent >= 95
-            ? 'bg-red-950/40 border-red-700'
-            : 'bg-yellow-950/40 border-yellow-700'
-        )}>
-          <AlertTriangle className={cn('w-5 h-5 flex-shrink-0 mt-0.5', adsPercent >= 95 ? 'text-red-400' : 'text-yellow-400')} />
-          <div>
-            <p className={cn('text-sm font-semibold', adsPercent >= 95 ? 'text-red-300' : 'text-yellow-300')}>
-              Google Ads — {adsPercent.toFixed(0)}% of $100/mo hard cap used
-            </p>
-            <p className="text-xs text-slate-400 mt-0.5">
-              ${ads.monthlySpend.toFixed(2)} spent · ${(ads.monthlyBudget - ads.monthlySpend).toFixed(2)} remaining this month
-            </p>
-          </div>
-          <Link to="/marketing" className="ml-auto text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 flex-shrink-0">
-            View <ArrowRight className="w-3 h-3" />
-          </Link>
+      <div className="flex items-start justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-xl font-semibold text-white">Operations Overview</h2>
+          <p className="text-sm text-slate-400 mt-1">
+            RainSoft Gulf Coast — daily snapshot
+          </p>
         </div>
-      )}
+        <button
+          onClick={refreshAll}
+          disabled={refreshing}
+          title={`Last refreshed ${lastRefreshed.toLocaleTimeString()}`}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium border border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700 disabled:opacity-50"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+          {refreshing ? 'Refreshing…' : `Refresh (${lastRefreshed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`}
+        </button>
+      </div>
 
       {/* Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -70,10 +109,14 @@ export function OverviewPage() {
             </Link>
           </CardHeader>
           <CardContent className="space-y-2">
-            {unread.length === 0 ? (
+            {loadingEmails ? (
+              <div className="flex items-center gap-2 py-2 text-slate-500 text-sm">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading...
+              </div>
+            ) : unread.length === 0 ? (
               <p className="text-sm text-slate-500">All caught up!</p>
             ) : (
-              unread.slice(0, 3).map((email) => (
+              unread.slice(0, 4).map((email) => (
                 <div key={email.id} className="flex items-start gap-3 py-1">
                   <div className="w-1.5 h-1.5 rounded-full bg-blue-400 mt-1.5 flex-shrink-0" />
                   <div className="min-w-0">
@@ -87,125 +130,108 @@ export function OverviewPage() {
           </CardContent>
         </Card>
 
-        {/* Agent Status */}
+        {/* Lead Stats */}
         <Card>
           <CardHeader>
             <CardTitle>
-              <Bot className="w-4 h-4 text-blue-400" />
-              Agent Status
+              <Target className="w-4 h-4 text-blue-400" />
+              Leads
             </CardTitle>
-            <Link to="/agents" className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1">
+            <Link to="/all-leads" className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1">
+              View all <ArrowRight className="w-3 h-3" />
+            </Link>
+          </CardHeader>
+          <CardContent>
+            {leadStats ? (
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-slate-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-slate-500">Lowe's</p>
+                  <p className="text-lg font-semibold font-mono text-blue-300 mt-1">{leadStats.lowes}</p>
+                </div>
+                <div className="bg-slate-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-slate-500">SmartMail</p>
+                  <p className="text-lg font-semibold font-mono text-purple-300 mt-1">{leadStats.smartmail}</p>
+                </div>
+                <div className="bg-slate-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-slate-500">In Salesforce</p>
+                  <p className="text-lg font-semibold font-mono text-emerald-300 mt-1">{leadStats.sfSynced}</p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 py-2 text-slate-500 text-sm">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading...
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Deal Tracker Summary */}
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              <TrendingUp className="w-4 h-4 text-blue-400" />
+              Deals
+            </CardTitle>
+            <Link to="/deal-tracker" className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1">
+              View all <ArrowRight className="w-3 h-3" />
+            </Link>
+          </CardHeader>
+          <CardContent>
+            {dealStats ? (
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-slate-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-slate-500">Total</p>
+                  <p className="text-lg font-semibold font-mono text-white mt-1">{dealStats.total ?? '—'}</p>
+                </div>
+                <div className="bg-slate-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-slate-500">Active</p>
+                  <p className="text-lg font-semibold font-mono text-blue-300 mt-1">{dealStats.active ?? '—'}</p>
+                </div>
+                <div className="bg-slate-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-slate-500">Funded (Mo)</p>
+                  <p className="text-lg font-semibold font-mono text-emerald-300 mt-1">{dealStats.fundedThisMonth ?? '—'}</p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 py-2 text-slate-500 text-sm">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading...
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Orders */}
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              <Package className="w-4 h-4 text-blue-400" />
+              Recent Orders
+            </CardTitle>
+            <Link to="/orders" className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1">
               View all <ArrowRight className="w-3 h-3" />
             </Link>
           </CardHeader>
           <CardContent className="space-y-2">
-            {mockAgents.map((agent) => (
-              <div key={agent.id} className="flex items-center gap-3">
-                <span className="text-lg">{agent.emoji}</span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm text-white">{agent.name}</p>
-                  <p className="text-xs text-slate-500 truncate">{agent.lastTask}</p>
+            {orderStats?.length > 0 ? (
+              orderStats.slice(0, 4).map((item: any, i: number) => (
+                <div key={i} className="flex items-center gap-3 py-1">
+                  <Badge variant={item.type === 'order' ? 'active' : item.type === 'shipment' ? 'scheduled' : item.type === 'payment' ? 'posted' : 'completed'}>
+                    {item.type}
+                  </Badge>
+                  <p className="text-sm text-slate-300 truncate flex-1">
+                    {item.orderNumber || item.invoiceNumber || item.tracking || item.subject || '—'}
+                  </p>
+                  <span className="text-xs text-slate-500 whitespace-nowrap">
+                    {item.ts ? new Date(item.ts).toLocaleDateString() : ''}
+                  </span>
                 </div>
-                <Badge variant={agent.status}>{agent.status}</Badge>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-
-        {/* Pending Posts */}
-        <Card>
-          <CardHeader>
-            <CardTitle>
-              <Megaphone className="w-4 h-4 text-blue-400" />
-              Pending Posts
-            </CardTitle>
-            <Link to="/marketing" className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1">
-              View all <ArrowRight className="w-3 h-3" />
-            </Link>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {pendingPosts.slice(0, 3).map((post) => (
-              <div key={post.id} className="flex items-start gap-3">
-                <span className="text-sm mt-0.5">
-                  {post.platform === 'Facebook' ? '📘' : post.platform === 'TikTok' ? '🎵' : '📸'}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs text-slate-300 truncate">{post.content}</p>
-                  <p className="text-xs text-slate-500 mt-0.5">{post.scheduledTime}</p>
-                </div>
-                <Badge variant={post.status as 'draft' | 'scheduled'}>{post.status}</Badge>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-
-        {/* Google Ads */}
-        <Card>
-          <CardHeader>
-            <CardTitle>
-              <div className="text-sm">G</div>
-              Google Ads Spend
-            </CardTitle>
-            <Link to="/marketing" className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1">
-              Manage <ArrowRight className="w-3 h-3" />
-            </Link>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <div className="flex justify-between items-baseline mb-2">
-                <span className="text-xs text-slate-400">Monthly (Hard Cap: $100)</span>
-                <span className={cn(
-                  'text-xl font-bold font-mono',
-                  adsPercent >= 95 ? 'text-red-400' : adsPercent >= 80 ? 'text-yellow-400' : 'text-white'
-                )}>
-                  ${ads.monthlySpend.toFixed(2)}
-                  <span className="text-sm text-slate-500 font-normal">/$100</span>
-                </span>
-              </div>
-              <ProgressBar
-                value={ads.monthlySpend}
-                max={ads.monthlyBudget}
-                showLabel
-              />
-            </div>
-            <div className="grid grid-cols-3 gap-3 pt-1">
-              {ads.campaigns.map((c) => (
-                <div key={c.id} className="bg-slate-800/50 rounded-lg p-2.5 text-center">
-                  <p className="text-xs text-slate-500 truncate">{c.name.split('–')[0].trim()}</p>
-                  <p className="text-sm font-semibold font-mono text-slate-200 mt-1">${c.spend}</p>
-                </div>
-              ))}
-            </div>
+              ))
+            ) : (
+              <p className="text-sm text-slate-500">No recent activity</p>
+            )}
           </CardContent>
         </Card>
       </div>
-
-      {/* Research */}
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            <FlaskConical className="w-4 h-4 text-blue-400" />
-            Recent Research
-          </CardTitle>
-          <Link to="/research" className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1">
-            View all <ArrowRight className="w-3 h-3" />
-          </Link>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {recentResearch.map((task) => (
-            <div key={task.id} className="flex items-start gap-3">
-              <div className="mt-0.5">
-                <Badge variant={task.status as 'completed' | 'in-progress' | 'pending'}>{task.status}</Badge>
-              </div>
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-white">{task.topic}</p>
-                <p className="text-xs text-slate-400 mt-0.5 line-clamp-1">{task.summary}</p>
-              </div>
-              <span className="text-xs text-slate-500 whitespace-nowrap ml-auto">{task.dateCompleted}</span>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
     </div>
   )
 }
